@@ -10,9 +10,7 @@ $ErrorActionPreference = "Stop"
 $Package = "nanobot-ai"
 $InstallTarget = $Package
 $InstallSource = "PyPI"
-$script:NanobotRunner = $null
 $script:NanobotPython = $null
-$script:LastInstallSucceeded = $false
 
 function Write-Info {
     param([string]$Message)
@@ -87,6 +85,41 @@ function Test-VirtualEnv {
     }
 }
 
+function Get-InstallMethod {
+    if (Test-VirtualEnv $Python) {
+        $ActivePrefix = & $Python -I -c "import json, sys; print(json.dumps(sys.prefix))" | ConvertFrom-Json
+        if ((Test-Path -LiteralPath (Join-Path $ActivePrefix "uv-receipt.toml")) -or
+            (Test-Path -LiteralPath (Join-Path $ActivePrefix "pipx_metadata.json"))) {
+            Fail "The active Python belongs to uv or pipx. Deactivate it and rerun this installer so its manager owns the update."
+        }
+        return "python"
+    }
+
+    $Existing = @()
+    if (Get-Command uv -ErrorAction SilentlyContinue) {
+        $ToolDir = & uv tool dir
+        if ($LASTEXITCODE -ne 0 -or -not $ToolDir) { Fail "Could not inspect the uv tools directory." }
+        if (Test-Path -LiteralPath (Join-Path $ToolDir $Package)) { $Existing += "uv" }
+    }
+    if (Get-Command pipx -ErrorAction SilentlyContinue) {
+        $ToolDir = & pipx environment --value PIPX_LOCAL_VENVS
+        if ($LASTEXITCODE -ne 0 -or -not $ToolDir) { Fail "Could not inspect the pipx environments directory." }
+        if (Test-Path -LiteralPath (Join-Path $ToolDir $Package)) { $Existing += "pipx" }
+    }
+    $ProfileDir = if ($env:HOME) { $env:HOME } else { $env:USERPROFILE }
+    if ($env:NANOBOT_VENV -or $ProfileDir) {
+        $Environment = if ($env:NANOBOT_VENV) { $env:NANOBOT_VENV } else { Join-Path $ProfileDir ".nanobot\venv" }
+        if (Test-Path -LiteralPath (Join-Path $Environment "pyvenv.cfg")) { $Existing += "managed" }
+    }
+    if ($Existing.Count -gt 1) {
+        Fail "Multiple nanobot installations were found. Use the intended environment's package manager; this installer changed none of them."
+    }
+    if ($Existing.Count -eq 1) { return $Existing[0] }
+    if (Get-Command uv -ErrorAction SilentlyContinue) { return "uv" }
+    if (Get-Command pipx -ErrorAction SilentlyContinue) { return "pipx" }
+    return "managed"
+}
+
 function Ensure-Pip {
     param([string]$Command)
 
@@ -105,32 +138,42 @@ function Ensure-Pip {
     }
 }
 
+function Select-InstalledPython {
+    param([string]$Command, [string]$ExpectedEnvironment = "")
+
+    $Probe = @'
+import json
+import sys
+from importlib.metadata import distribution
+from pathlib import Path
+
+import nanobot
+
+prefix = Path(sys.prefix).resolve()
+package = Path(nanobot.__file__).resolve()
+expected = sys.argv[1] if len(sys.argv) > 1 else ""
+if sys.prefix == sys.base_prefix or (expected and prefix != Path(expected).resolve()):
+    raise SystemExit("The installed interpreter does not belong to the expected virtual environment")
+if not package.is_relative_to(prefix) or package != Path(distribution("nanobot-ai").locate_file("nanobot/__init__.py")).resolve():
+    raise SystemExit("nanobot imports from outside the installed package")
+print(json.dumps(str(Path(sys.executable).absolute())))
+'@
+    # Do not resolve the interpreter symlink or launch a new pipx/uv run environment.
+    # Send code on stdin so Windows PowerShell preserves its embedded quotes.
+    $Result = $Probe | & $Command -I - $ExpectedEnvironment
+    if ($LASTEXITCODE -ne 0 -or -not $Result) {
+        Fail "nanobot was installed, but its environment could not be verified. No other installation was attempted."
+    }
+    $script:NanobotPython = [string]($Result | ConvertFrom-Json)
+}
+
 function Invoke-Nanobot {
     param([string[]]$NanobotArgs)
-
-    switch ($script:NanobotRunner) {
-        "uv" {
-            & uv tool run --from $InstallTarget nanobot @NanobotArgs
-        }
-        "pipx" {
-            & pipx run --spec $InstallTarget nanobot @NanobotArgs
-        }
-        "python" {
-            & $script:NanobotPython -m nanobot @NanobotArgs
-        }
-        default {
-            Fail "nanobot was installed, but no runner was configured."
-        }
-    }
+    & $script:NanobotPython -I -m nanobot @NanobotArgs
 }
 
 function Get-NanobotCommand {
-    switch ($script:NanobotRunner) {
-        "uv" { return "uv tool run --from $InstallTarget nanobot" }
-        "pipx" { return "pipx run --spec $InstallTarget nanobot" }
-        "python" { return "$script:NanobotPython -m nanobot" }
-        default { return "nanobot" }
-    }
+    return "& '" + $script:NanobotPython.Replace("'", "''") + "' -I -m nanobot"
 }
 
 function Test-FreshNanobotInstall {
@@ -160,30 +203,47 @@ function Install-WithActivePython {
     if ($LASTEXITCODE -ne 0) {
         Show-InstallFailureHint
     }
-    $script:NanobotRunner = "python"
-    $script:NanobotPython = $Python
+    Select-InstalledPython $Python
 }
 
 function Install-WithUv {
-    $script:LastInstallSucceeded = $false
     Write-Info "Installing or upgrading nanobot from $InstallSource with uv tool..."
-    & uv tool install --python $Python --force --upgrade $InstallTarget
-    if ($LASTEXITCODE -ne 0) {
-        return
+    $ToolDir = & uv tool dir
+    if ($LASTEXITCODE -ne 0 -or -not $ToolDir) {
+        Fail "Could not locate the uv tools directory."
     }
-    $script:NanobotRunner = "uv"
-    $script:LastInstallSucceeded = $true
+    $Environment = Join-Path $ToolDir $Package
+    if (Test-Path -LiteralPath (Join-Path $Environment "uv-receipt.toml")) {
+        & uv tool upgrade $Package
+    } elseif (Test-Path -LiteralPath $Environment) {
+        Fail "The uv environment exists without its installation record. Repair it with uv before rerunning this installer."
+    } else {
+        & uv tool install --python $Python $InstallTarget
+    }
+    if ($LASTEXITCODE -ne 0) {
+        Fail "uv could not install or upgrade nanobot. Resolve the error above and retry; no other installation was attempted."
+    }
+    Select-InstalledPython (Join-Path $Environment "Scripts\python.exe") $Environment
 }
 
 function Install-WithPipx {
-    $script:LastInstallSucceeded = $false
     Write-Info "Installing or upgrading nanobot from $InstallSource with pipx..."
-    & pipx install --python $Python --force $InstallTarget
-    if ($LASTEXITCODE -ne 0) {
-        return
+    $ToolDir = & pipx environment --value PIPX_LOCAL_VENVS
+    if ($LASTEXITCODE -ne 0 -or -not $ToolDir) {
+        Fail "Could not locate the pipx environments directory."
     }
-    $script:NanobotRunner = "pipx"
-    $script:LastInstallSucceeded = $true
+    $Environment = Join-Path $ToolDir $Package
+    if (Test-Path -LiteralPath (Join-Path $Environment "pipx_metadata.json")) {
+        & pipx upgrade $Package
+    } elseif (Test-Path -LiteralPath $Environment) {
+        Fail "The pipx environment exists without its installation record. Repair it with pipx before rerunning this installer."
+    } else {
+        & pipx install --python $Python $InstallTarget
+    }
+    if ($LASTEXITCODE -ne 0) {
+        Fail "pipx could not install or upgrade nanobot. Resolve the error above and retry; no other installation was attempted."
+    }
+    Select-InstalledPython (Join-Path $Environment "Scripts\python.exe") $Environment
 }
 
 function Install-WithManagedVenv {
@@ -218,9 +278,13 @@ function Install-WithManagedVenv {
         Show-InstallFailureHint
     }
 
-    $script:NanobotRunner = "python"
-    $script:NanobotPython = $VenvPython
+    Select-InstalledPython $VenvPython $VenvDir
 }
+
+$PreviousOutputEncoding = [Console]::OutputEncoding
+try {
+# uv/pipx emit UTF-8 paths; Windows PowerShell otherwise uses the console code page.
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 
 foreach ($Arg in $RemainingArgs) {
     switch ($Arg) {
@@ -251,24 +315,25 @@ if ($Dev) {
 $Python = Find-Python
 $Version = & $Python --version
 Write-Info "Using Python: $Version"
+$InstallMethod = Get-InstallMethod
 
 if ($DryRun) {
     Write-Info "Dry run: would install or upgrade nanobot from $InstallSource."
-    if (Test-VirtualEnv $Python) {
+    if ($InstallMethod -eq "python") {
         Write-Info "Dry run: active virtual environment detected; would run: $Python -m pip install --upgrade $InstallTarget"
-        Write-Info "Dry run: would run nanobot as: $Python -m nanobot"
-    } elseif (Get-Command uv -ErrorAction SilentlyContinue) {
-        Write-Info "Dry run: would run: uv tool install --python $Python --force --upgrade $InstallTarget"
-        Write-Info "Dry run: would run nanobot as: uv tool run --from $InstallTarget nanobot"
-    } elseif (Get-Command pipx -ErrorAction SilentlyContinue) {
-        Write-Info "Dry run: would run: pipx install --python $Python --force $InstallTarget"
-        Write-Info "Dry run: would run nanobot as: pipx run --spec $InstallTarget nanobot"
+        Write-Info "Dry run: would start nanobot with this environment's Python in isolated mode."
+    } elseif ($InstallMethod -eq "uv") {
+        Write-Info "Dry run: would install with uv tool install, or use uv tool upgrade for an existing installation."
+        Write-Info "Dry run: would start nanobot from its persistent uv tool environment."
+    } elseif ($InstallMethod -eq "pipx") {
+        Write-Info "Dry run: would install with pipx install, or use pipx upgrade for an existing installation."
+        Write-Info "Dry run: would start nanobot from its persistent pipx environment."
     } else {
         $HomeDir = if ($env:HOME) { $env:HOME } elseif ($env:USERPROFILE) { $env:USERPROFILE } else { "~" }
         $VenvDir = if ($env:NANOBOT_VENV) { $env:NANOBOT_VENV } else { Join-Path $HomeDir ".nanobot\venv" }
         Write-Info "Dry run: would create or reuse a dedicated virtual environment: $VenvDir"
         Write-Info "Dry run: would run: $VenvDir\Scripts\python.exe -m pip install --upgrade $InstallTarget"
-        Write-Info "Dry run: would run nanobot as: $VenvDir\Scripts\python.exe -m nanobot"
+        Write-Info "Dry run: would start nanobot with $VenvDir\Scripts\python.exe in isolated mode."
     }
     if ($env:NANOBOT_SKIP_WIZARD -eq "1") {
         Write-Info "Dry run: would skip automatic setup because NANOBOT_SKIP_WIZARD=1."
@@ -282,31 +347,15 @@ if ($DryRun) {
     return
 }
 
-if (Test-VirtualEnv $Python) {
+if ($InstallMethod -eq "python") {
     Install-WithActivePython
+} elseif ($InstallMethod -eq "uv") {
+    Install-WithUv
+} elseif ($InstallMethod -eq "pipx") {
+    Install-WithPipx
 } else {
-    $Installed = $false
-
-    if (Get-Command uv -ErrorAction SilentlyContinue) {
-        Install-WithUv
-        $Installed = $script:LastInstallSucceeded
-        if (-not $Installed) {
-            Write-Info "uv tool install failed. Trying the next isolated install method..."
-        }
-    }
-
-    if (-not $Installed -and (Get-Command pipx -ErrorAction SilentlyContinue)) {
-        Install-WithPipx
-        $Installed = $script:LastInstallSucceeded
-        if (-not $Installed) {
-            Write-Info "pipx install failed. Trying the managed virtual environment..."
-        }
-    }
-
-    if (-not $Installed) {
-        Write-Info "Using a dedicated virtual environment to avoid system pip."
-        Install-WithManagedVenv
-    }
+    Write-Info "Using a dedicated virtual environment to avoid system pip."
+    Install-WithManagedVenv
 }
 
 Write-Info "Installed nanobot:"
@@ -344,3 +393,6 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Info "Done. Try: $(Get-NanobotCommand) agent -m `"Hello!`""
+} finally {
+    [Console]::OutputEncoding = $PreviousOutputEncoding
+}

@@ -191,6 +191,12 @@ jobs:
       - name: Verify dependency consistency
         run: uv pip check
 
+      - name: Install pipx for offline installer checks
+        shell: bash
+        run: |
+          uv tool install pipx==1.17.12
+          uv tool dir --bin >> "$GITHUB_PATH"
+
       # Channel requirements live in manifests rather than uv.lock. Avoid a
       # later uv run sync pruning the packages installed by the previous step.
       - name: Lint with ruff

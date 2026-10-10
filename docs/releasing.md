@@ -69,6 +69,27 @@ Keep an artifact manifest with the source commit, version, filenames, hashes, ch
 
 Do not publish to PyPI while a required TUI artifact or verification is missing. Keep the documentation's public `latest` on the previous stable version until the new version is usable. If a published package needs a correction, prepare a new version; do not silently replace the code behind an existing release tag. Stop all old processes and follow the documented session rollback procedure before downgrading a migrated installation.
 
+## Installer identity checks
+
+Run `pytest tests/test_install_scripts.py` with `uv` and `pipx` available. These
+checks use private homes, offline fixture wheels and actual package managers; they
+do not start a gateway or install the real application. Unix uses `install.sh` and
+Windows uses Windows PowerShell with `install.ps1`. CI provisions pipx separately
+from the application's dependency environment.
+
+The installer starts the verified persistent environment's Python in isolated mode,
+not `pipx run`, a disposable tool execution or whichever `nanobot` is on PATH. An
+existing recognized uv/pipx/installer-managed environment takes priority over a newly
+available manager. Multiple recognized installations require an explicit manual
+choice. An active ordinary venv remains an explicit target; an activated uv/pipx
+environment must be updated through its manager instead of pip. Existing manager
+constraints remain in force, so a pinned installation can stay at its pinned version.
+
+A failed selected manager no longer falls through to another installation, including
+on first install. Fix the reported error and retry, or deliberately choose the manual
+installation route. These checks do not establish maintenance, backup or restart
+safety for a running gateway; the managed in-app update lifecycle is a separate gate.
+
 ## Non-publishing preview preflight
 
 **Verify Release Candidate** is a manually dispatched preparation workflow, not an

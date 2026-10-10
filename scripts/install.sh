@@ -5,7 +5,6 @@ package="nanobot-ai"
 install_target="$package"
 install_source="PyPI"
 dry_run="0"
-nanobot_runner=""
 nanobot_python=""
 
 info() {
@@ -63,6 +62,50 @@ raise SystemExit(0 if sys.prefix != sys.base_prefix else 1)
 PY
 }
 
+select_install_method() {
+  if python_is_virtual_env; then
+    active_prefix="$("$python_bin" -I -c 'import sys; print(sys.prefix)')"
+    if [ -f "$active_prefix/uv-receipt.toml" ] || [ -f "$active_prefix/pipx_metadata.json" ]; then
+      fail "The active Python belongs to uv or pipx. Deactivate it and rerun this installer so its manager owns the update."
+    fi
+    install_method="python"
+    return
+  fi
+
+  install_method=""
+  existing_count=0
+  if command -v uv >/dev/null 2>&1; then
+    uv_dir="$(uv tool dir)" || fail "Could not inspect the uv tools directory"
+    [ -n "$uv_dir" ] || fail "uv returned an empty tools directory"
+    if [ -e "$uv_dir/$package" ]; then
+      install_method="uv"
+      existing_count=$((existing_count + 1))
+    fi
+  fi
+  if command -v pipx >/dev/null 2>&1; then
+    pipx_dir="$(pipx environment --value PIPX_LOCAL_VENVS)" || fail "Could not inspect the pipx environments directory"
+    [ -n "$pipx_dir" ] || fail "pipx returned an empty environments directory"
+    if [ -e "$pipx_dir/$package" ]; then
+      install_method="pipx"
+      existing_count=$((existing_count + 1))
+    fi
+  fi
+  if [ -n "${NANOBOT_VENV:-}${HOME:-}" ] && [ -f "${NANOBOT_VENV:-${HOME:-}/.nanobot/venv}/pyvenv.cfg" ]; then
+    install_method="managed"
+    existing_count=$((existing_count + 1))
+  fi
+  [ "$existing_count" -le 1 ] || fail "Multiple nanobot installations were found. Use the intended environment's package manager; this installer changed none of them."
+  if [ -z "$install_method" ]; then
+    if command -v uv >/dev/null 2>&1; then
+      install_method="uv"
+    elif command -v pipx >/dev/null 2>&1; then
+      install_method="pipx"
+    else
+      install_method="managed"
+    fi
+  fi
+}
+
 ensure_pip() {
   target_python="$1"
   if "$target_python" -m pip --version >/dev/null 2>&1; then
@@ -73,35 +116,34 @@ ensure_pip() {
   "$target_python" -m ensurepip --upgrade >/dev/null 2>&1
 }
 
+select_installed_python() {
+  # Keep the venv interpreter path (resolving its symlink would select base Python).
+  # Isolated mode also prevents a checkout/PYTHONPATH from shadowing the new package.
+  nanobot_python="$("$1" -I - "$2" <<'PY'
+import sys
+from importlib.metadata import distribution
+from pathlib import Path
+
+import nanobot
+
+prefix = Path(sys.prefix).resolve()
+package = Path(nanobot.__file__).resolve()
+expected = sys.argv[1]
+if sys.prefix == sys.base_prefix or (expected and prefix != Path(expected).resolve()):
+    raise SystemExit("The installed interpreter does not belong to the expected virtual environment")
+if not package.is_relative_to(prefix) or package != Path(distribution("nanobot-ai").locate_file("nanobot/__init__.py")).resolve():
+    raise SystemExit("nanobot imports from outside the installed package")
+print(Path(sys.executable).absolute())
+PY
+  )" || fail "nanobot was installed, but its environment could not be verified. No other installation was attempted."
+}
+
 run_nanobot() {
-  case "$nanobot_runner" in
-    uv)
-      uv tool run --from "$install_target" nanobot "$@"
-      ;;
-    pipx)
-      pipx run --spec "$install_target" nanobot "$@"
-      ;;
-    python)
-      "$nanobot_python" -m nanobot "$@"
-      ;;
-    *)
-      fail "nanobot was installed, but no runner was configured"
-      ;;
-  esac
+  "$nanobot_python" -I -m nanobot "$@"
 }
 
 nanobot_try_command() {
-  case "$nanobot_runner" in
-    uv)
-      printf '%s\n' "uv tool run --from $install_target nanobot"
-      ;;
-    pipx)
-      printf '%s\n' "pipx run --spec $install_target nanobot"
-      ;;
-    python)
-      printf '%s\n' "$nanobot_python -m nanobot"
-      ;;
-  esac
+  "$python_bin" -I -c 'import shlex, sys; print(shlex.quote(sys.argv[1]) + " -I -m nanobot")' "$nanobot_python"
 }
 
 is_fresh_nanobot_install() {
@@ -132,20 +174,37 @@ install_with_active_python() {
   info "Detected an active virtual environment. Installing into it..."
   ensure_pip "$python_bin" || return 1
   "$python_bin" -m pip install --upgrade "$install_target" || return 1
-  nanobot_runner="python"
-  nanobot_python="$python_bin"
+  select_installed_python "$python_bin" ""
 }
 
 install_with_uv() {
   info "Installing or upgrading nanobot from $install_source with uv tool..."
-  uv tool install --python "$python_bin" --force --upgrade "$install_target" || return 1
-  nanobot_runner="uv"
+  tool_dir="$(uv tool dir)" || fail "Could not locate the uv tools directory"
+  [ -n "$tool_dir" ] || fail "uv returned an empty tools directory"
+  if [ -f "$tool_dir/$package/uv-receipt.toml" ]; then
+    uv tool upgrade "$package" || fail "uv could not upgrade nanobot. Resolve the error above and retry; no other installation was attempted."
+  elif [ -e "$tool_dir/$package" ]; then
+    fail "The uv environment exists without its installation record. Repair it with uv before rerunning this installer."
+  else
+    uv tool install --python "$python_bin" "$install_target" ||
+      fail "uv could not install nanobot. Resolve the error above and retry; no other installation was attempted."
+  fi
+  select_installed_python "$tool_dir/$package/bin/python" "$tool_dir/$package"
 }
 
 install_with_pipx() {
   info "Installing or upgrading nanobot from $install_source with pipx..."
-  pipx install --python "$python_bin" --force "$install_target" || return 1
-  nanobot_runner="pipx"
+  tool_dir="$(pipx environment --value PIPX_LOCAL_VENVS)" || fail "Could not locate the pipx environments directory"
+  [ -n "$tool_dir" ] || fail "pipx returned an empty environments directory"
+  if [ -f "$tool_dir/$package/pipx_metadata.json" ]; then
+    pipx upgrade "$package" || fail "pipx could not upgrade nanobot. Resolve the error above and retry; no other installation was attempted."
+  elif [ -e "$tool_dir/$package" ]; then
+    fail "The pipx environment exists without its installation record. Repair it with pipx before rerunning this installer."
+  else
+    pipx install --python "$python_bin" "$install_target" ||
+      fail "pipx could not install nanobot. Resolve the error above and retry; no other installation was attempted."
+  fi
+  select_installed_python "$tool_dir/$package/bin/python" "$tool_dir/$package"
 }
 
 write_managed_wrapper() {
@@ -158,10 +217,11 @@ write_managed_wrapper() {
     return 0
   fi
 
+  nanobot_command="$(nanobot_try_command)"
   cat > "$wrapper" <<EOF
 #!/bin/sh
 # Generated by nanobot installer.
-exec "$nanobot_python" -m nanobot "\$@"
+exec $nanobot_command "\$@"
 EOF
   chmod +x "$wrapper" || return 0
 
@@ -192,8 +252,7 @@ PY
   ensure_pip "$venv_python" || return 1
   "$venv_python" -m pip install --upgrade "$install_target" || return 1
 
-  nanobot_runner="python"
-  nanobot_python="$venv_python"
+  select_installed_python "$venv_python" "$venv_dir"
   write_managed_wrapper
 }
 
@@ -229,23 +288,24 @@ else
 fi
 
 info "Using Python: $("$python_bin" --version 2>&1)"
+select_install_method
 
 if [ "$dry_run" = "1" ]; then
   info "Dry run: would install or upgrade nanobot from $install_source."
-  if python_is_virtual_env; then
+  if [ "$install_method" = "python" ]; then
     info "Dry run: active virtual environment detected; would run: $python_bin -m pip install --upgrade $install_target"
-    info "Dry run: would run nanobot as: $python_bin -m nanobot"
-  elif command -v uv >/dev/null 2>&1; then
-    info "Dry run: would run: uv tool install --python $python_bin --force --upgrade $install_target"
-    info "Dry run: would run nanobot as: uv tool run --from $install_target nanobot"
-  elif command -v pipx >/dev/null 2>&1; then
-    info "Dry run: would run: pipx install --python $python_bin --force $install_target"
-    info "Dry run: would run nanobot as: pipx run --spec $install_target nanobot"
+    info "Dry run: would start nanobot with this environment's Python in isolated mode."
+  elif [ "$install_method" = "uv" ]; then
+    info "Dry run: would install with uv tool install, or use uv tool upgrade for an existing installation."
+    info "Dry run: would start nanobot from its persistent uv tool environment."
+  elif [ "$install_method" = "pipx" ]; then
+    info "Dry run: would install with pipx install, or use pipx upgrade for an existing installation."
+    info "Dry run: would start nanobot from its persistent pipx environment."
   else
     venv_dir="${NANOBOT_VENV:-$HOME/.nanobot/venv}"
     info "Dry run: would create or reuse a dedicated virtual environment: $venv_dir"
     info "Dry run: would run: $venv_dir/bin/python -m pip install --upgrade $install_target"
-    info "Dry run: would run nanobot as: $venv_dir/bin/python -m nanobot"
+    info "Dry run: would start nanobot with $venv_dir/bin/python in isolated mode."
   fi
   if [ "${NANOBOT_SKIP_WIZARD:-}" = "1" ]; then
     info "Dry run: would skip automatic setup because NANOBOT_SKIP_WIZARD=1."
@@ -259,31 +319,15 @@ if [ "$dry_run" = "1" ]; then
   exit 0
 fi
 
-if python_is_virtual_env; then
+if [ "$install_method" = "python" ]; then
   install_with_active_python || install_failure_hint
+elif [ "$install_method" = "uv" ]; then
+  install_with_uv
+elif [ "$install_method" = "pipx" ]; then
+  install_with_pipx
 else
-  installed="0"
-
-  if command -v uv >/dev/null 2>&1; then
-    if install_with_uv; then
-      installed="1"
-    else
-      info "uv tool install failed. Trying the next isolated install method..."
-    fi
-  fi
-
-  if [ "$installed" != "1" ] && command -v pipx >/dev/null 2>&1; then
-    if install_with_pipx; then
-      installed="1"
-    else
-      info "pipx install failed. Trying the managed virtual environment..."
-    fi
-  fi
-
-  if [ "$installed" != "1" ]; then
-    info "Using a dedicated virtual environment to avoid system pip."
-    install_with_managed_venv || install_failure_hint
-  fi
+  info "Using a dedicated virtual environment to avoid system pip."
+  install_with_managed_venv || install_failure_hint
 fi
 
 info "Installed nanobot:"
