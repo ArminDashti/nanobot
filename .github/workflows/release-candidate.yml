@@ -59,7 +59,8 @@ jobs:
         working-directory: ${{ env.CANDIDATE_DIR }}
         run: |
           python -m pytest tests/test_release_candidate.py tests/test_releases.py \
-            tests/cli/test_tui_wheels.py tests/cli/test_tui_release_packaging.py -q
+            tests/test_installed_release_probe.py tests/cli/test_tui_wheels.py \
+            tests/cli/test_tui_release_packaging.py -q
 
       - name: Check WebUI and build Python distributions
         working-directory: ${{ env.CANDIDATE_DIR }}
@@ -114,14 +115,30 @@ jobs:
           python -m twine check "$RUNNER_TEMP/release-artifacts/"*.whl \
             "$RUNNER_TEMP/release-artifacts/"*.tar.gz
 
+      - name: Install and probe the Linux wheel without frontend build tools
+        working-directory: ${{ env.CANDIDATE_DIR }}
+        run: |
+          version="${NEXT_STABLE}.dev${PREVIEW_SEQUENCE}"
+          uv_bin="$(command -v uv)"
+          uv venv --python 3.11 "$RUNNER_TEMP/installed-candidate"
+          mkdir "$RUNNER_TEMP/empty-install-path"
+          env PATH="$RUNNER_TEMP/empty-install-path" "$uv_bin" pip install \
+            --python "$RUNNER_TEMP/installed-candidate/bin/python" --only-binary :all: \
+            "$RUNNER_TEMP/release-artifacts/nanobot_ai-${version}-py3-none-manylinux_2_17_x86_64.whl"
+          uv pip check --python "$RUNNER_TEMP/installed-candidate/bin/python"
+          "$RUNNER_TEMP/installed-candidate/bin/python" -I scripts/verify_installed_release.py \
+            --version "$version" --commit "$(git rev-parse HEAD)" \
+            --report "$RUNNER_TEMP/installed-candidate-report.json"
+
       # Keep the default preflight cheap: no ~400 MB archive upload per manual run.
       # These reports are not installable releases or publication approvals.
-      - name: Retain identity and structural verification report
+      - name: Retain identity, structural and native Linux probe reports
         uses: actions/upload-artifact@v4
         with:
           name: candidate-report-${{ github.run_number }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/candidate.json
             ${{ runner.temp }}/release-artifacts/release-manifest.json
+            ${{ runner.temp }}/installed-candidate-report.json
           if-no-files-found: error
           retention-days: 3

@@ -78,6 +78,27 @@ checks all five platform wheels, the source distribution and licensed fallback a
 It retains only the small identity/manifest reports for three days, not installable
 binaries. Cross-compilation is not native execution or release approval.
 
+After assembly, the workflow installs the Linux x64 wheel and its binary dependencies
+in a separate venv with no Bun/Node/Git on the install PATH. It then uses that venv's
+isolated Python to check version/commit/import identity, serve every Vite-manifest asset
+(including lazy chunks) through the installed asset handler on loopback, and execute
+the bundled TUI's `--desktop-protocol` probe with downloads disabled and an empty private
+HOME. The small report identifies its actual OS and CPU. This is native package probing,
+not interactive TUI/WebUI, a running gateway, migration or five-platform E2E coverage.
+
+The same check can run against a disposable native installation on another supported
+platform; it neither installs nor changes the package being checked:
+
+```bash
+<installed-venv-python> -I scripts/verify_installed_release.py \
+  --version <candidate-version> --commit <candidate-commit> \
+  --report <new-report-path>
+```
+
+Use the prepared candidate commit, not its source parent. Reports are written only on
+success and never replace earlier evidence. The probe rejects checkout imports and
+unisolated invocation; it does not read the user's gateway configuration or credentials.
+
 To reproduce preparation locally, use a full source SHA and a new output directory
 outside the checkout. The example base/sequence are illustrative, not published versions:
 
