@@ -90,6 +90,28 @@ on first install. Fix the reported error and retry, or deliberately choose the m
 installation route. These checks do not establish maintenance, backup or restart
 safety for a running gateway; the managed in-app update lifecycle is a separate gate.
 
+The installers also accept an exact, already downloaded native wheel from a verified
+release handoff. With this version of the scripts, use `install.sh --wheel <path>
+--sha256 <published-hash>` or `install.ps1 -Wheel <path> -Sha256 <published-hash>`.
+Both verify the file's checksum and package/version identity before installation;
+`--dry-run` / `-DryRun` performs those checks without installing or starting setup.
+The existing owner is still selected first. uv retains its receipt constraints; pipx
+uses its upgrade-in-place operation and carries forward the requested extras. A wheel
+missing a recorded pipx extra is refused before the manager is run. Manager version
+requirements are the same as the tested exact-target handoff below.
+
+After an exact install, the persistent environment must contain the requested version
+before onboarding can start. A successful pinned/locked skip is reported as a failure
+to install that target, not as a successful update. Keep the downloaded wheel at its
+original path because the manager can record it as the installation source. Use trusted
+release metadata for the hash; a checksum alone does not authenticate an unknown publisher.
+
+This is the installer-side handoff for a selected artifact, not yet automatic Preview
+discovery/download or a channel subscription. Use scripts that actually contain these
+options; older installers do not. It does not stop gateways or back up data. Stop affected
+writers and complete a backup first. Plain pip environments still require explicit review
+of extras, and suffixed/custom installations require their own manager instructions.
+
 ## Non-publishing preview preflight
 
 **Verify Release Candidate** is a manually dispatched preparation workflow, not an

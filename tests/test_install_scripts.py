@@ -12,6 +12,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -26,7 +27,7 @@ WINDOWS = os.name == "nt"
 BASE_PYTHON = sys._base_executable
 
 
-def _wheel(directory, version, *, platform="any", package="nanobot-ai"):
+def _wheel(directory, version, *, platform="any", package="nanobot-ai", extras=()):
     module = package.replace("-", "_") if package != "nanobot-ai" else "nanobot"
     wheel_name = package.replace("-", "_")
     metadata = f"{wheel_name}-{version}.dist-info"
@@ -54,6 +55,7 @@ if __name__ == "__main__":
     files = {name.replace("nanobot/", f"{module}/"): content for name, content in files.items()}
     files[f"{module}/__main__.py"] = files[f"{module}/__main__.py"].replace("nanobot", module)
     files[f"{metadata}/METADATA"] = files[f"{metadata}/METADATA"].replace("Name: nanobot-ai", f"Name: {package}")
+    files[f"{metadata}/METADATA"] += "".join(f"Provides-Extra: {extra}\n" for extra in extras)
     files[f"{metadata}/WHEEL"] = files[f"{metadata}/WHEEL"].replace("py3-none-any", f"py3-none-{platform}")
     files[f"{metadata}/entry_points.txt"] = f"[console_scripts]\n{module} = {module}.__main__:main\n"
     record = []
@@ -253,11 +255,11 @@ def test_dry_run_does_not_create_tool_environment(sandbox):
     assert "INSTALLER_PROBE" not in result.stdout
 
 
-def _preview_manifest(sandbox, *, damaged_hash=False):
+def _preview_manifest(sandbox, *, damaged_hash=False, extras=()):
     version = "0.0.2.dev1"
     platform = next(tag.platform for tag in sys_tags()
                     if tag.platform in releases.PLATFORMS.values())
-    wheel = _wheel(sandbox["cwd"], version, platform=platform)
+    wheel = _wheel(sandbox["cwd"], version, platform=platform, extras=extras)
     digest = "0" * 64 if damaged_hash else hashlib.sha256(wheel.read_bytes()).hexdigest()
     artifacts = [releases.ReleaseArtifact(
         filename=name, size=wheel.stat().st_size if name == wheel.name else 123,
@@ -362,3 +364,115 @@ def test_exact_pipx_target_preserves_injected_package_and_records_new_spec(sandb
     assert after["main_package"]["package_or_url"] == f"nanobot-ai @ {(sandbox['cwd'] / artifact.filename).as_uri()}"
     _run([str(_python(prefix)), "-I", "-c", "import fixture_helper"], sandbox)
     assert _verify_owner(sandbox, "pipx", prefix)["version"] == manifest.version
+
+
+def _wheel_arguments(sandbox, artifact):
+    return ["-Wheel" if WINDOWS else "--wheel", str(sandbox["cwd"] / artifact.filename),
+            "-Sha256" if WINDOWS else "--sha256", artifact.sha256]
+
+
+@pytest.mark.parametrize("owner", ["uv", "pipx", "pip", "managed"])
+@pytest.mark.parametrize("existing", [False, True], ids=["fresh", "existing"])
+def test_public_installer_accepts_verified_exact_preview(sandbox, owner, existing):
+    if owner == "managed":
+        prefix = sandbox["root"] / "managed"
+        if existing:
+            _wheel(sandbox["wheels"], "0.0.1")
+            _installer(sandbox)
+    else:
+        executable, prefix = _owner_environment(sandbox, owner, existing=existing)
+        if owner == "pip":
+            sandbox["env"]["PYTHON"] = executable
+    manifest, artifact = _preview_manifest(sandbox)
+    result = _installer(sandbox, *_wheel_arguments(sandbox, artifact))
+    identity = _identity(result)
+    assert identity["version"] == manifest.version
+    assert Path(identity["prefix"]).resolve() == prefix
+    assert Path(identity["python"]).absolute() == _python(prefix)
+    assert (sandbox["cwd"] / artifact.filename).is_file()
+
+
+def test_public_installer_rejects_damaged_wheel_before_environment_creation(sandbox):
+    _expose(sandbox, "uv")
+    _, artifact = _preview_manifest(sandbox, damaged_hash=True)
+    result = _installer(sandbox, *_wheel_arguments(sandbox, artifact), check=False)
+    assert result.returncode != 0
+    assert "SHA-256 mismatch" in result.stdout + result.stderr
+    assert not (sandbox["root"] / "uv-tools/nanobot-ai").exists()
+    assert not (sandbox["root"] / "managed").exists()
+
+
+def test_public_installer_does_not_report_pinned_skip_as_preview_success(sandbox):
+    pipx, prefix = _owner_environment(sandbox, "pipx", existing=True)
+    _run([pipx, "pin", "nanobot-ai"], sandbox)
+    _, artifact = _preview_manifest(sandbox)
+    result = _installer(sandbox, *_wheel_arguments(sandbox, artifact), check=False)
+    assert result.returncode != 0
+    assert "requested version was not installed" in result.stdout + result.stderr
+    assert "INSTALLER_PROBE" not in result.stdout
+    assert _verify_owner(sandbox, "pipx", prefix)["version"] == "0.0.1"
+
+
+def test_public_installer_wheel_dry_run_validates_but_does_not_install(sandbox):
+    _expose(sandbox, "uv")
+    manifest, artifact = _preview_manifest(sandbox)
+    result = _installer(sandbox, "--dry-run", *_wheel_arguments(sandbox, artifact))
+    assert f"verified wheel {manifest.version}" in result.stdout
+    assert not (sandbox["root"] / "uv-tools/nanobot-ai").exists()
+
+
+def test_public_installer_pipx_preview_preserves_requested_extras(sandbox):
+    pipx = _expose(sandbox, "pipx")
+    prefix = sandbox["root"] / "pipx/venvs/nanobot-ai"
+    _wheel(sandbox["wheels"], "0.0.1", extras=("feature",))
+    _run([pipx, "install", "--skip-maintenance", "nanobot-ai[feature]"], sandbox)
+    _, artifact = _preview_manifest(sandbox, extras=("feature",))
+    _installer(sandbox, *_wheel_arguments(sandbox, artifact))
+    record = json.loads((prefix / "pipx_metadata.json").read_text())
+    assert record["main_package"]["package_or_url"].startswith("nanobot-ai[feature] @ ")
+
+
+def test_public_installer_uv_preview_preserves_requested_extras(sandbox):
+    uv = _expose(sandbox, "uv")
+    prefix = sandbox["root"] / "uv-tools/nanobot-ai"
+    _wheel(sandbox["wheels"], "0.0.1", extras=("feature",))
+    _run([uv, "tool", "install", "--python", BASE_PYTHON, "nanobot-ai[feature]"], sandbox)
+    _, artifact = _preview_manifest(sandbox, extras=("feature",))
+    _installer(sandbox, *_wheel_arguments(sandbox, artifact))
+    record = tomllib.loads((prefix / "uv-receipt.toml").read_text())
+    assert any(item.get("extras") == ["feature"] for item in record["tool"]["requirements"])
+
+
+def test_public_installer_refuses_missing_previously_requested_pipx_extra(sandbox):
+    pipx = _expose(sandbox, "pipx")
+    prefix = sandbox["root"] / "pipx/venvs/nanobot-ai"
+    _wheel(sandbox["wheels"], "0.0.1", extras=("feature",))
+    _run([pipx, "install", "--skip-maintenance", "nanobot-ai[feature]"], sandbox)
+    _, artifact = _preview_manifest(sandbox)
+    result = _installer(sandbox, *_wheel_arguments(sandbox, artifact), check=False)
+    assert result.returncode != 0
+    assert "does not provide all existing pipx extras" in result.stdout + result.stderr
+    assert _verify_owner(sandbox, "pipx", prefix)["version"] == "0.0.1"
+
+
+def test_public_installer_incomplete_wheel_request_never_falls_back_to_pypi(sandbox):
+    _wheel(sandbox["wheels"], "0.0.1")
+    flag = "-Wheel" if WINDOWS else "--wheel"
+    result = _installer(sandbox, flag, "missing.whl", check=False)
+    assert result.returncode != 0
+    assert "supplied together" in result.stdout + result.stderr
+    assert not (sandbox["root"] / "managed").exists()
+
+
+def test_public_installer_wrong_platform_keeps_original_environment(sandbox):
+    python, prefix = _owner_environment(sandbox, "pip", existing=True)
+    sandbox["env"]["PYTHON"] = python
+    foreign = "macosx_13_0_arm64" if WINDOWS else "win_amd64"
+    wheel = _wheel(sandbox["cwd"], "0.0.2.dev1", platform=foreign)
+    artifact = releases.ReleaseArtifact(filename=wheel.name, size=wheel.stat().st_size,
+                                        sha256=hashlib.sha256(wheel.read_bytes()).hexdigest())
+    result = _installer(sandbox, *_wheel_arguments(sandbox, artifact), check=False)
+    assert result.returncode != 0
+    assert "retry this exact handoff" in result.stdout + result.stderr
+    assert "uv tool install --force" not in result.stdout + result.stderr
+    assert _verify_owner(sandbox, "pip", prefix)["version"] == "0.0.1"

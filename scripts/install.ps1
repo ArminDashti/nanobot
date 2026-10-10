@@ -1,6 +1,8 @@
 param(
     [switch]$Dev,
     [switch]$DryRun,
+    [string]$Wheel,
+    [string]$Sha256,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$RemainingArgs
 )
@@ -11,6 +13,7 @@ $Package = "nanobot-ai"
 $InstallTarget = $Package
 $InstallSource = "PyPI"
 $script:NanobotPython = $null
+$ExpectedVersion = ""
 
 function Write-Info {
     param([string]$Message)
@@ -24,6 +27,9 @@ function Fail {
 
 function Show-InstallFailureHint {
     [Console]::Error.WriteLine("Error: could not install nanobot from $InstallSource.")
+    if ($ExpectedVersion) {
+        Fail "Inspect the original manager error and retry this exact handoff. No setup or other installation was attempted."
+    }
     [Console]::Error.WriteLine("If pip mentioned externally-managed-environment, use uv, pipx, or a virtual environment instead of system pip.")
     [Console]::Error.WriteLine("You can also run manually:")
     [Console]::Error.WriteLine("  uv tool install --force --upgrade $InstallTarget")
@@ -35,10 +41,12 @@ function Show-InstallFailureHint {
 }
 
 function Show-Usage {
-    Write-Host "Usage: install.ps1 [-DryRun|--dry-run]"
+    Write-Host "Usage: install.ps1 [-DryRun|--dry-run] [-Wheel PATH -Sha256 HASH]"
     Write-Host ""
     Write-Host "By default this installs or upgrades nanobot-ai from PyPI."
     Write-Host "Use --dry-run to print what would happen without installing or starting setup."
+    Write-Host "Use -Wheel and -Sha256 together for a verified release handoff; retain the downloaded wheel."
+    Write-Host "Stop affected gateways and back up their data before updating an existing install."
     Write-Host ""
     Write-Host "For current main, clone the repository and run 'python -m pip install -e .'."
 }
@@ -152,17 +160,20 @@ import nanobot
 prefix = Path(sys.prefix).resolve()
 package = Path(nanobot.__file__).resolve()
 expected = sys.argv[1] if len(sys.argv) > 1 else ""
-if sys.prefix == sys.base_prefix or (expected and prefix != Path(expected).resolve()):
+if sys.prefix == sys.base_prefix or (expected not in ("", "-") and prefix != Path(expected).resolve()):
     raise SystemExit("The installed interpreter does not belong to the expected virtual environment")
 if not package.is_relative_to(prefix) or package != Path(distribution("nanobot-ai").locate_file("nanobot/__init__.py")).resolve():
     raise SystemExit("nanobot imports from outside the installed package")
+if len(sys.argv) > 2 and sys.argv[2] and distribution("nanobot-ai").version != sys.argv[2]:
+    raise SystemExit("The requested version was not installed. Check manager pins or locks; no setup was started.")
 print(json.dumps(str(Path(sys.executable).absolute())))
 '@
     # Do not resolve the interpreter symlink or launch a new pipx/uv run environment.
     # Send code on stdin so Windows PowerShell preserves its embedded quotes.
-    $Result = $Probe | & $Command -I - $ExpectedEnvironment
+    $ExpectedRoot = if ($ExpectedEnvironment) { $ExpectedEnvironment } else { "-" }
+    $Result = $Probe | & $Command -I - $ExpectedRoot $ExpectedVersion
     if ($LASTEXITCODE -ne 0 -or -not $Result) {
-        Fail "nanobot was installed, but its environment could not be verified. No other installation was attempted."
+        Fail "The installed nanobot environment could not be verified. No setup or other installation was attempted."
     }
     $script:NanobotPython = [string]($Result | ConvertFrom-Json)
 }
@@ -214,7 +225,7 @@ function Install-WithUv {
     }
     $Environment = Join-Path $ToolDir $Package
     if (Test-Path -LiteralPath (Join-Path $Environment "uv-receipt.toml")) {
-        & uv tool upgrade $Package
+        & uv tool upgrade $InstallTarget
     } elseif (Test-Path -LiteralPath $Environment) {
         Fail "The uv environment exists without its installation record. Repair it with uv before rerunning this installer."
     } else {
@@ -234,7 +245,11 @@ function Install-WithPipx {
     }
     $Environment = Join-Path $ToolDir $Package
     if (Test-Path -LiteralPath (Join-Path $Environment "pipx_metadata.json")) {
-        & pipx upgrade $Package
+        if ($Wheel) {
+            & pipx install --skip-maintenance --upgrade $InstallTarget
+        } else {
+            & pipx upgrade $Package
+        }
     } elseif (Test-Path -LiteralPath $Environment) {
         Fail "The pipx environment exists without its installation record. Repair it with pipx before rerunning this installer."
     } else {
@@ -316,6 +331,64 @@ $Python = Find-Python
 $Version = & $Python --version
 Write-Info "Using Python: $Version"
 $InstallMethod = Get-InstallMethod
+
+if ($PSBoundParameters.ContainsKey("Wheel") -or $PSBoundParameters.ContainsKey("Sha256")) {
+    if (-not $Wheel -or -not $Sha256) { Fail "-Wheel and -Sha256 must be supplied together." }
+    $OwnerRecord = "-"
+    if ($InstallMethod -eq "pipx") {
+        $PipxDir = & pipx environment --value PIPX_LOCAL_VENVS
+        if ($LASTEXITCODE -ne 0 -or -not $PipxDir) { Fail "Could not inspect the pipx environments directory." }
+        $OwnerRecord = Join-Path (Join-Path $PipxDir $Package) "pipx_metadata.json"
+    }
+    $Verify = @'
+import hashlib
+import json
+import re
+import sys
+from email.parser import BytesParser
+from pathlib import Path
+from zipfile import ZipFile
+
+path = Path(sys.argv[1]).absolute()
+match = re.fullmatch(r"nanobot_ai-(\d+\.\d+\.\d+(?:\.dev\d+|\.post\d+)?)-py3-none-(macosx_13_0_(?:arm64|x86_64)|manylinux_2_17_(?:aarch64|x86_64)|win_amd64)\.whl", path.name)
+if not match or path.is_symlink() or not path.is_file() or not re.fullmatch(r"[0-9a-f]{64}", sys.argv[2]):
+    raise SystemExit("Expected a saved native nanobot wheel and its published SHA-256")
+with path.open("rb") as stream:
+    if hashlib.file_digest(stream, "sha256").hexdigest() != sys.argv[2]:
+        raise SystemExit("Wheel SHA-256 mismatch; no package manager was started")
+version = match[1]
+with ZipFile(path) as wheel:
+    metadata_path = f"nanobot_ai-{version}.dist-info/METADATA"
+    if wheel.getinfo(metadata_path).file_size > 256 * 1024:
+        raise SystemExit("Wheel metadata exceeds its size limit")
+    metadata = BytesParser().parsebytes(wheel.read(metadata_path))
+    if metadata["Name"] != "nanobot-ai" or metadata["Version"] != version:
+        raise SystemExit("Wheel identity does not match its filename")
+extras = []
+record = Path(sys.argv[3])
+if sys.argv[3] != "-" and record.is_file():
+    if record.stat().st_size > 1024 * 1024:
+        raise SystemExit("pipx installation record is too large; inspect it before updating")
+    spec = json.loads(record.read_text(encoding="utf-8"))["main_package"]["package_or_url"]
+    extra_match = re.match(r"(?i)^nanobot[-_.]ai\[([a-z0-9_., -]+)\]", spec)
+    if extra_match:
+        extras = sorted({re.sub(r"[-_.]+", "-", extra.strip().lower()) for extra in extra_match[1].split(",")})
+        if any(not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", extra) for extra in extras):
+            raise SystemExit("Cannot preserve pipx extras; review the installation manually")
+    elif "[" in spec:
+        raise SystemExit("Cannot preserve pipx extras; review the installation manually")
+    provided = {re.sub(r"[-_.]+", "-", extra.lower()) for extra in metadata.get_all("Provides-Extra", [])}
+    if not set(extras) <= provided:
+        raise SystemExit("The target wheel does not provide all existing pipx extras")
+requirement = "nanobot-ai" + ("[" + ",".join(extras) + "]" if extras else "")
+print(requirement + " @ " + path.as_uri() + "|" + version)
+'@
+    $WheelIdentity = $Verify | & $Python -I - $Wheel $Sha256 $OwnerRecord
+    if ($LASTEXITCODE -ne 0 -or -not $WheelIdentity) { Fail "Release verification failed; no installation was attempted." }
+    $InstallTarget, $ExpectedVersion = $WheelIdentity -split '\|', 2
+    $InstallSource = "verified wheel $ExpectedVersion"
+    Write-Info "Verified nanobot $ExpectedVersion. Keep the downloaded wheel at its current path."
+}
 
 if ($DryRun) {
     Write-Info "Dry run: would install or upgrade nanobot from $InstallSource."

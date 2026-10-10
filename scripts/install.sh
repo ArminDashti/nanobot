@@ -6,6 +6,10 @@ install_target="$package"
 install_source="PyPI"
 dry_run="0"
 nanobot_python=""
+release_wheel=""
+release_sha256=""
+release_requested="0"
+expected_version=""
 
 info() {
   printf '%s\n' "$*"
@@ -18,6 +22,10 @@ fail() {
 
 install_failure_hint() {
   printf '%s\n' "Error: could not install nanobot from $install_source." >&2
+  if [ -n "$expected_version" ]; then
+    printf '%s\n' "Inspect the original manager error and retry this exact handoff. No setup or other installation was attempted." >&2
+    exit 1
+  fi
   printf '%s\n' "If pip mentioned externally-managed-environment, use uv, pipx, or a virtual environment instead of system pip." >&2
   printf '%s\n' "You can also run manually:" >&2
   printf '  %s\n' "uv tool install --force --upgrade $install_target" >&2
@@ -30,10 +38,13 @@ install_failure_hint() {
 
 usage() {
   cat <<'EOF'
-Usage: install.sh [--dry-run]
+Usage: install.sh [--dry-run] [--wheel PATH --sha256 HASH]
 
 By default this installs or upgrades nanobot-ai from PyPI.
 Use --dry-run to print what would happen without installing or starting setup.
+For a verified release handoff, use --wheel and --sha256 together. Keep that
+downloaded wheel in place; your manager may record it as the installation source.
+Stop affected gateways and back up their data before updating an existing install.
 
 For current main, clone the repository and run `python -m pip install -e .`.
 EOF
@@ -119,7 +130,7 @@ ensure_pip() {
 select_installed_python() {
   # Keep the venv interpreter path (resolving its symlink would select base Python).
   # Isolated mode also prevents a checkout/PYTHONPATH from shadowing the new package.
-  nanobot_python="$("$1" -I - "$2" <<'PY'
+  nanobot_python="$("$1" -I - "$2" "$expected_version" <<'PY'
 import sys
 from importlib.metadata import distribution
 from pathlib import Path
@@ -133,9 +144,11 @@ if sys.prefix == sys.base_prefix or (expected and prefix != Path(expected).resol
     raise SystemExit("The installed interpreter does not belong to the expected virtual environment")
 if not package.is_relative_to(prefix) or package != Path(distribution("nanobot-ai").locate_file("nanobot/__init__.py")).resolve():
     raise SystemExit("nanobot imports from outside the installed package")
+if sys.argv[2] and distribution("nanobot-ai").version != sys.argv[2]:
+    raise SystemExit("The requested version was not installed. Check manager pins or locks; no setup was started.")
 print(Path(sys.executable).absolute())
 PY
-  )" || fail "nanobot was installed, but its environment could not be verified. No other installation was attempted."
+  )" || fail "The installed nanobot environment could not be verified. No setup or other installation was attempted."
 }
 
 run_nanobot() {
@@ -182,7 +195,7 @@ install_with_uv() {
   tool_dir="$(uv tool dir)" || fail "Could not locate the uv tools directory"
   [ -n "$tool_dir" ] || fail "uv returned an empty tools directory"
   if [ -f "$tool_dir/$package/uv-receipt.toml" ]; then
-    uv tool upgrade "$package" || fail "uv could not upgrade nanobot. Resolve the error above and retry; no other installation was attempted."
+    uv tool upgrade "$install_target" || fail "uv could not upgrade nanobot. Resolve the error above and retry; no other installation was attempted."
   elif [ -e "$tool_dir/$package" ]; then
     fail "The uv environment exists without its installation record. Repair it with uv before rerunning this installer."
   else
@@ -197,7 +210,11 @@ install_with_pipx() {
   tool_dir="$(pipx environment --value PIPX_LOCAL_VENVS)" || fail "Could not locate the pipx environments directory"
   [ -n "$tool_dir" ] || fail "pipx returned an empty environments directory"
   if [ -f "$tool_dir/$package/pipx_metadata.json" ]; then
-    pipx upgrade "$package" || fail "pipx could not upgrade nanobot. Resolve the error above and retry; no other installation was attempted."
+    if [ -n "$release_wheel" ]; then
+      pipx install --skip-maintenance --upgrade "$install_target" || fail "pipx could not upgrade nanobot. Resolve the error above and retry; no other installation was attempted."
+    else
+      pipx upgrade "$package" || fail "pipx could not upgrade nanobot. Resolve the error above and retry; no other installation was attempted."
+    fi
   elif [ -e "$tool_dir/$package" ]; then
     fail "The pipx environment exists without its installation record. Repair it with pipx before rerunning this installer."
   else
@@ -258,6 +275,12 @@ PY
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --wheel|--sha256)
+      [ "$#" -ge 2 ] || fail "$1 requires a value"
+      release_requested="1"
+      if [ "$1" = "--wheel" ]; then release_wheel="$2"; else release_sha256="$2"; fi
+      shift
+      ;;
     --dev)
       fail "--dev installed an untracked main snapshot and is no longer supported; clone the repository and run 'python -m pip install -e .' instead"
       ;;
@@ -289,6 +312,60 @@ fi
 
 info "Using Python: $("$python_bin" --version 2>&1)"
 select_install_method
+
+if [ "$release_requested" = "1" ]; then
+  [ -n "$release_wheel" ] && [ -n "$release_sha256" ] || fail "--wheel and --sha256 must be supplied together"
+  owner_record="-"
+  if [ "$install_method" = "pipx" ]; then owner_record="$pipx_dir/$package/pipx_metadata.json"; fi
+  wheel_identity="$("$python_bin" -I - "$release_wheel" "$release_sha256" "$owner_record" <<'PY'
+import hashlib
+import json
+import re
+import sys
+from email.parser import BytesParser
+from pathlib import Path
+from zipfile import ZipFile
+
+path = Path(sys.argv[1]).absolute()
+match = re.fullmatch(r"nanobot_ai-(\d+\.\d+\.\d+(?:\.dev\d+|\.post\d+)?)-py3-none-(macosx_13_0_(?:arm64|x86_64)|manylinux_2_17_(?:aarch64|x86_64)|win_amd64)\.whl", path.name)
+if not match or path.is_symlink() or not path.is_file() or not re.fullmatch(r"[0-9a-f]{64}", sys.argv[2]):
+    raise SystemExit("Expected a saved native nanobot wheel and its published SHA-256")
+with path.open("rb") as stream:
+    if hashlib.file_digest(stream, "sha256").hexdigest() != sys.argv[2]:
+        raise SystemExit("Wheel SHA-256 mismatch; no package manager was started")
+version = match[1]
+with ZipFile(path) as wheel:
+    metadata_path = f"nanobot_ai-{version}.dist-info/METADATA"
+    if wheel.getinfo(metadata_path).file_size > 256 * 1024:
+        raise SystemExit("Wheel metadata exceeds its size limit")
+    metadata = BytesParser().parsebytes(wheel.read(metadata_path))
+    if metadata["Name"] != "nanobot-ai" or metadata["Version"] != version:
+        raise SystemExit("Wheel identity does not match its filename")
+extras = []
+record = Path(sys.argv[3])
+if sys.argv[3] != "-" and record.is_file():
+    if record.stat().st_size > 1024 * 1024:
+        raise SystemExit("pipx installation record is too large; inspect it before updating")
+    spec = json.loads(record.read_text(encoding="utf-8"))["main_package"]["package_or_url"]
+    extra_match = re.match(r"(?i)^nanobot[-_.]ai\[([a-z0-9_., -]+)\]", spec)
+    if extra_match:
+        extras = sorted({re.sub(r"[-_.]+", "-", extra.strip().lower()) for extra in extra_match[1].split(",")})
+        if any(not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", extra) for extra in extras):
+            raise SystemExit("Cannot preserve pipx extras; review the installation manually")
+    elif "[" in spec:
+        raise SystemExit("Cannot preserve pipx extras; review the installation manually")
+    provided = {re.sub(r"[-_.]+", "-", extra.lower()) for extra in metadata.get_all("Provides-Extra", [])}
+    if not set(extras) <= provided:
+        raise SystemExit("The target wheel does not provide all existing pipx extras")
+requirement = "nanobot-ai" + ("[" + ",".join(extras) + "]" if extras else "")
+print(requirement + " @ " + path.as_uri() + "|" + version)
+PY
+  )" || fail "Release verification failed; no installation was attempted."
+  install_target="${wheel_identity%|*}"
+  expected_version="${wheel_identity##*|}"
+  install_source="verified wheel $expected_version"
+  info "Verified nanobot $expected_version. Keep the downloaded wheel at its current path."
+fi
 
 if [ "$dry_run" = "1" ]; then
   info "Dry run: would install or upgrade nanobot from $install_source."
