@@ -142,8 +142,16 @@ in a separate venv with no Bun/Node/Git on the install PATH. It then uses that v
 isolated Python to check version/commit/import identity, serve every Vite-manifest asset
 (including lazy chunks) through the installed asset handler on loopback, and execute
 the bundled TUI's `--desktop-protocol` probe with downloads disabled and an empty private
-HOME. The small report identifies its actual OS and CPU. This is native package probing,
-not interactive TUI/WebUI, a running gateway, migration or five-platform E2E coverage.
+HOME. With `--gateway`, the workflow also starts the installed CLI's foreground gateway
+with a new, private profile, no configured provider/MCP servers, disabled heartbeat and
+two loopback-only ports. It verifies readiness, the running version through the protected
+WebUI identity endpoint, the actual HTML response, and process/listener cleanup. Unix
+must exit gracefully; Windows cleanup uses process termination and is labelled as such,
+not graceful-shutdown evidence. No model task or external channel is exercised.
+
+The small report identifies its actual OS, CPU and which probes ran. This is native
+package/startup verification, not interactive TUI/WebUI, updater-managed restart, migration,
+public-download or five-platform E2E coverage.
 
 The same check can run against a disposable native installation on another supported
 platform; it neither installs nor changes the package being checked:
@@ -151,12 +159,14 @@ platform; it neither installs nor changes the package being checked:
 ```bash
 <installed-venv-python> -I scripts/verify_installed_release.py \
   --version <candidate-version> --commit <candidate-commit> \
-  --report <new-report-path>
+  --gateway --report <new-report-path>
 ```
 
 Use the prepared candidate commit, not its source parent. Reports are written only on
 success and never replace earlier evidence. The probe rejects checkout imports and
 unisolated invocation; it does not read the user's gateway configuration or credentials.
+Omit `--gateway` to run only asset and native TUI probes. A failed startup writes no
+success report and prints a bounded, secret-redacted log tail after cleaning up its child.
 
 To reproduce preparation locally, use a full source SHA and a new output directory
 outside the checkout. The example base/sequence are illustrative, not published versions:

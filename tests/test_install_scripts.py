@@ -728,6 +728,28 @@ def test_public_installer_damaged_https_download_never_updates_existing_package(
     assert not list(cache.rglob("*.whl")) and not list(cache.rglob("*.part"))
 
 
+@pytest.mark.parametrize("owner", ["uv", "pipx"])
+def test_release_bootstrap_preserves_explicit_manager_pin(sandbox, release_https, owner):
+    executable, prefix = _owner_environment(sandbox, owner, existing=False)
+    if owner == "uv":
+        _run([executable, "tool", "install", "nanobot-ai==0.0.1"], sandbox)
+        receipt = prefix / "uv-receipt.toml"
+    else:
+        _run([executable, "install", "--skip-maintenance", "nanobot-ai"], sandbox)
+        _run([executable, "pin", "nanobot-ai"], sandbox)
+        receipt = prefix / "pipx_metadata.json"
+    before = receipt.read_bytes()
+    manifest, digest, _, requests, network = release_https
+    sandbox["env"].update(network)
+    result = _installer(sandbox, *_release_arguments(manifest.version, digest), check=False)
+    assert result.returncode != 0
+    assert "INSTALLER_PROBE" not in result.stdout
+    assert len(requests) == 2  # Pin enforcement follows successful selection/download.
+    assert receipt.read_bytes() == before
+    assert _verify_owner(sandbox, owner, prefix)["version"] == "0.0.1"
+    assert not (sandbox["root"] / "managed").exists()
+
+
 @pytest.mark.skipif(WINDOWS, reason="Unix bootstrap command; Windows installer is tested separately")
 def test_generated_bootstrap_command_downloads_and_upgrades_original_owner(sandbox, release_https):
     manifest, digest, payloads, requests, network = release_https

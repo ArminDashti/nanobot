@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.verify_installed_release import webui_assets
+from scripts.verify_installed_release import gateway_probe, webui_assets
 
 
 @pytest.fixture
@@ -48,13 +48,32 @@ def test_stale_html_cannot_pass_against_an_unrelated_manifest(frontend):
         webui_assets(frontend)
 
 
-def test_probe_requires_isolated_python_before_importing_source(tmp_path):
+@pytest.mark.parametrize("options", [[], ["--gateway"]])
+def test_probe_requires_isolated_python_before_importing_source(tmp_path, options):
     script = Path(__file__).resolve().parents[1] / "scripts/verify_installed_release.py"
     report = tmp_path / "report.json"
     result = subprocess.run(
         [sys.executable, str(script), "--version", "0.3.6.dev1", "--commit", "a" * 40,
-         "--report", str(report)], capture_output=True, text=True, timeout=10,
+         "--report", str(report), *options], capture_output=True, text=True, timeout=10,
     )
     assert result.returncode == 2
     assert "python -I" in result.stderr
     assert not report.exists()
+
+
+def test_gateway_probe_reports_failed_cli_start_and_reaps_its_child(tmp_path, monkeypatch, capsys):
+    popen = subprocess.Popen
+    children = []
+
+    def failed_cli(command, **kwargs):
+        # A missing runtime dependency makes the installed CLI exit before binding.
+        child = popen([command[0], "-I", "-c",
+                       "print('candidate startup failed'); raise SystemExit(7)"], **kwargs)
+        children.append(child)
+        return child
+
+    monkeypatch.setattr(subprocess, "Popen", failed_cli)
+    with pytest.raises(ValueError, match="exited before readiness: 7"):
+        gateway_probe("0.3.6.dev1", tmp_path / "gateway")
+    assert len(children) == 1 and children[0].poll() == 7
+    assert "candidate startup failed" in capsys.readouterr().err
