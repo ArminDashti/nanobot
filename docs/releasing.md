@@ -191,7 +191,12 @@ python -m scripts.release_candidate assemble --source-commit <original-source-sh
 
 Assembly refuses an existing output directory. It emits `release-manifest.json` only
 after checking the complete set, version/commit identity, WebUI presence, wheel RECORDs,
-native bundle/source correspondence and executable permissions. `verify --source-commit
+native bundle/source correspondence and executable permissions. It also compares the
+sdist's application sources/resources with the tracked candidate (using the packaging
+exclusions), then requires every platform wheel to carry the same application and built
+WebUI bytes as that sdist. A commit marker or a valid RECORD alone does not establish
+that correspondence. This byte comparison does not prove reproducible frontend/native
+compilation or replace the clean build and native execution gates. `verify --source-commit
 <original-source-sha> --artifacts <artifact-directory>` rechecks the same candidate;
 it may reuse an identical manifest but never overwrite one with different bytes.
 

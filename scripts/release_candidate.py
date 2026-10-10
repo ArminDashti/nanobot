@@ -18,6 +18,7 @@ import subprocess
 import tempfile
 import tomllib
 from email.parser import BytesParser
+from fnmatch import fnmatchcase
 from pathlib import Path
 
 from packaging.version import Version
@@ -125,6 +126,29 @@ def _candidate_identity(root: Path, source_commit: str) -> tuple[str, str, str]:
     return version, requires_python, candidate_commit
 
 
+def _source_payload(root: Path, source: dict[str, bytes], prefix: str) -> dict[str, bytes]:
+    """Bind shipped application files to the clean candidate, not its commit label."""
+    tracked = set(_git(root, "ls-files", "-z", trim=False).split("\0")) - {""}
+    build = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["hatch"]["build"]
+    # The sdist ships the tracked nanobot tree. Read its actual exclusions rather
+    # than maintaining a second list of channel test directories here.
+    exclusions = [*build.get("exclude", []), *build["targets"]["sdist"].get("exclude", [])]
+    expected = {name for name in tracked if name.startswith("nanobot/")
+                and not any(fnmatchcase(name, pattern) for pattern in exclusions)}
+    payload = {name.removeprefix(prefix): data for name, data in source.items()
+               if name.startswith(prefix + "nanobot/")}
+    generated = {name for name in payload if name == "nanobot/_build_commit.txt"
+                 or name.startswith("nanobot/web/dist/")}
+    if payload.keys() - generated != expected:
+        raise ValueError("Source application payload has missing or unexpected files")
+    for name, data in payload.items():
+        if name in generated:
+            continue
+        if data != (root / name).read_bytes():
+            raise ValueError(f"Source application payload differs from the candidate: {name}")
+    return payload
+
+
 def verify_candidate(root: Path, artifacts: Path, *, source_commit: str) -> ReleaseManifest:
     version, requires_python, candidate_commit = _candidate_identity(root, source_commit)
     expected = release_filenames(version)
@@ -135,25 +159,6 @@ def verify_candidate(root: Path, artifacts: Path, *, source_commit: str) -> Rele
         if (artifacts / name).is_symlink() or not (artifacts / name).is_file():
             raise ValueError(f"Release artifact must be a regular file: {name}")
     commit_bytes = (candidate_commit + "\n").encode()
-    for target, platform in PLATFORMS.items():
-        wheel = artifacts / f"nanobot_ai-{version}-py3-none-{platform}.whl"
-        files, modes, info = wheel_files(wheel, version, platform=platform)
-        package_metadata = BytesParser().parsebytes(files[f"{info}/METADATA"])
-        if package_metadata["Requires-Python"] != requires_python:
-            raise ValueError("Wheel Python requirement differs from the candidate")
-        if files.get("nanobot/_build_commit.txt") != commit_bytes:
-            raise ValueError("Wheel build commit differs from the candidate")
-        if not files.get("nanobot/web/dist/index.html"):
-            raise ValueError("Wheel is missing its compiled WebUI")
-        bundle = release_bundle(artifacts, target, root=root)
-        embedded = {name.removeprefix("nanobot/tui/bin/"): data for name, data in files.items()
-                    if name.startswith("nanobot/tui/bin/")}
-        if embedded != bundle:
-            raise ValueError("Wheel and fallback TUI archive differ")
-        asset = f"nanobot-tui-{target}" + (".exe" if target == "win32-x64" else "")
-        mode = modes[f"nanobot/tui/bin/{asset}"]
-        if not stat.S_ISREG(mode) or stat.S_IMODE(mode) != 0o755:
-            raise ValueError("Installed TUI must retain executable permissions")
     source = source_files((artifacts / f"nanobot_ai-{version}.tar.gz").read_bytes())
     prefix = f"nanobot_ai-{version}/"
     source_metadata = BytesParser().parsebytes(source[f"{prefix}PKG-INFO"])
@@ -167,6 +172,30 @@ def verify_candidate(root: Path, artifacts: Path, *, source_commit: str) -> Rele
     if (source.get(f"{prefix}nanobot/_build_commit.txt") != commit_bytes
             or not source.get(f"{prefix}nanobot/web/dist/index.html")):
         raise ValueError("Source distribution must contain the candidate commit and built WebUI")
+    payload = _source_payload(root, source, prefix)
+    for target, platform in PLATFORMS.items():
+        wheel = artifacts / f"nanobot_ai-{version}-py3-none-{platform}.whl"
+        files, modes, info = wheel_files(wheel, version, platform=platform)
+        package_metadata = BytesParser().parsebytes(files[f"{info}/METADATA"])
+        if package_metadata["Requires-Python"] != requires_python:
+            raise ValueError("Wheel Python requirement differs from the candidate")
+        if files.get("nanobot/_build_commit.txt") != commit_bytes:
+            raise ValueError("Wheel build commit differs from the candidate")
+        if not files.get("nanobot/web/dist/index.html"):
+            raise ValueError("Wheel is missing its compiled WebUI")
+        application = {name: data for name, data in files.items()
+                       if name.startswith("nanobot/") and not name.startswith("nanobot/tui/bin/")}
+        if application != payload:
+            raise ValueError(f"Wheel application payload differs from the source distribution: {target}")
+        bundle = release_bundle(artifacts, target, root=root)
+        embedded = {name.removeprefix("nanobot/tui/bin/"): data for name, data in files.items()
+                    if name.startswith("nanobot/tui/bin/")}
+        if embedded != bundle:
+            raise ValueError("Wheel and fallback TUI archive differ")
+        asset = f"nanobot-tui-{target}" + (".exe" if target == "win32-x64" else "")
+        mode = modes[f"nanobot/tui/bin/{asset}"]
+        if not stat.S_ISREG(mode) or stat.S_IMODE(mode) != 0o755:
+            raise ValueError("Installed TUI must retain executable permissions")
     records: list[ReleaseArtifact] = []
     for name in sorted(expected):
         path = artifacts / name
