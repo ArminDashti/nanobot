@@ -31,7 +31,7 @@ def _digest(data: bytes) -> str:
     return "sha256=" + base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode()
 
 
-def _source_files(raw: bytes) -> dict[str, bytes]:
+def source_files(raw: bytes) -> dict[str, bytes]:
     """Compare archive contents without extracting any untrusted path to disk."""
     files = {}
     with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as archive:
@@ -117,7 +117,7 @@ def release_bundle(tui_dir: Path, target: str, *, root: Path = ROOT) -> dict[str
     source_packager = runpy.run_path(str(root / "tui/scripts/package-release.py"))
     source_packager["_validate_opentui_version"](root / "tui", notices)
     expected_source = source_packager["_source_archive"](root / "tui")
-    if _source_files(bundle["nanobot-tui-source.tar.gz"]) != _source_files(expected_source):
+    if source_files(bundle["nanobot-tui-source.tar.gz"]) != source_files(expected_source):
         raise ValueError("TUI archive source does not match this release checkout; rebuild it")
     return bundle
 

@@ -18,7 +18,7 @@ import pytest
 
 from nanobot.cli import tui_launcher
 from scripts import build_tui_wheels as packager
-from scripts.release_candidate import verify_candidate, write_manifest
+from scripts.release_candidate import verify_candidate, write_install_guide, write_manifest
 
 
 @pytest.fixture
@@ -241,7 +241,30 @@ def test_complete_manifest_binds_wheels_sdist_and_fallback_archives(tmp_path, ca
     assert output.read_bytes() == original
     with pytest.raises(FileExistsError):
         write_manifest(manifest.model_copy(update={"source_commit": "f" * 40}), output)
+    guide = tmp_path / "install.md"
+    write_install_guide(root, artifacts, guide, source_commit=commit)
+    original_guide = guide.read_bytes()
+    write_install_guide(root, artifacts, guide, source_commit=commit)
+    assert guide.read_bytes() == original_guide
+    assert commit.encode() in original_guide
+    assert len(list(artifacts.iterdir())) == 17  # 16 artifacts and the manifest, no guide.
+    with pytest.raises(ValueError, match="outside"):
+        write_install_guide(root, artifacts, artifacts / "install.md", source_commit=commit)
+    guide.write_text("previous reviewed handoff\n")
+    with pytest.raises(FileExistsError, match="overwrite"):
+        write_install_guide(root, artifacts, guide, source_commit=commit)
+    assert guide.read_text() == "previous reviewed handoff\n"
+    recorded = json.loads(original)
+    recorded["artifacts"][0]["sha256"] = "f" * 64
+    output.write_text(json.dumps(recorded))
+    with pytest.raises(ValueError, match="recorded release manifest"):
+        write_install_guide(root, artifacts, tmp_path / "unverified.md", source_commit=commit)
+    assert not (tmp_path / "unverified.md").exists()
+    output.write_bytes(original)
     damaged = artifacts / "nanobot-tui-linux-x64.zip.sha256"
     damaged.write_text("0" * 64 + "  nanobot-tui-linux-x64.zip\n")
     with pytest.raises(ValueError, match="checksum mismatch"):
         verify_candidate(root, artifacts, source_commit=commit)
+    with pytest.raises(ValueError, match="checksum mismatch"):
+        write_install_guide(root, artifacts, tmp_path / "damaged.md", source_commit=commit)
+    assert not (tmp_path / "damaged.md").exists()

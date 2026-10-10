@@ -147,6 +147,32 @@ native bundle/source correspondence and executable permissions. `verify --source
 <original-source-sha> --artifacts <artifact-directory>` rechecks the same candidate;
 it may reuse an identical manifest but never overwrite one with different bytes.
 
+Generate the initial manual installation handoff from that same candidate:
+
+```bash
+python -m scripts.release_candidate instructions --source-commit <original-source-sha> \
+  --artifacts <artifact-directory> --output <new-install-guide-path.md>
+```
+
+This rechecks all artifacts against the candidate and retained manifest before writing
+commands. The guide is a review report outside the immutable upload directory;
+it cannot overwrite different earlier evidence. It includes the exact version, source
+and candidate commits, five platform wheels with hash-bound URLs, and separate new/existing
+base-package commands for uv, pipx and an ordinary pip venv. Users save the selected wheel
+in a directory they own; the commands check its size and SHA-256 with the standard library
+before passing that local file to the manager. Do not rely on a URL hash fragment alone:
+the tested uv tool commands did not reject an incorrect fragment. Retain the saved wheel
+because a manager may record its path. No new manifest schema or installer executable is
+introduced. CI retains this guide alongside the other small reports.
+
+The guide is not publication approval or automatic channel selection. Before offering it
+to users, publish and verify the exact public files and add the release-specific changes,
+native coverage, migration and recovery instructions. Existing installs must be stopped
+and backed up first; extras, suffixed/locked installs and external deployment owners need
+their recorded options reviewed. A successful manager exit can mean a pinned package was
+left unchanged: verify the persistent package and then the restarted gateway separately.
+The real offline manager fixtures test command semantics, not gateway restart or migration.
+
 The candidate clone borrows Git objects from its source repository. Preserve that
 repository until the candidate is retained in an approved permanent ref; the temporary
 clone is not a durable source archive by itself. Partial assembly has no accepted manifest

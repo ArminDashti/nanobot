@@ -29,7 +29,8 @@ from nanobot.releases import (
     release_filenames,
     release_version,
 )
-from scripts.build_tui_wheels import _source_files, build_wheel, release_bundle, wheel_files
+from scripts.build_tui_wheels import build_wheel, release_bundle, source_files, wheel_files
+from scripts.release_install_guide import render_install_guide
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION_FILES = ("pyproject.toml", "nanobot/__init__.py")
@@ -153,7 +154,7 @@ def verify_candidate(root: Path, artifacts: Path, *, source_commit: str) -> Rele
         mode = modes[f"nanobot/tui/bin/{asset}"]
         if not stat.S_ISREG(mode) or stat.S_IMODE(mode) != 0o755:
             raise ValueError("Installed TUI must retain executable permissions")
-    source = _source_files((artifacts / f"nanobot_ai-{version}.tar.gz").read_bytes())
+    source = source_files((artifacts / f"nanobot_ai-{version}.tar.gz").read_bytes())
     prefix = f"nanobot_ai-{version}/"
     source_metadata = BytesParser().parsebytes(source[f"{prefix}PKG-INFO"])
     if (source_metadata["Name"], source_metadata["Version"], source_metadata["Requires-Python"]) != (
@@ -166,7 +167,7 @@ def verify_candidate(root: Path, artifacts: Path, *, source_commit: str) -> Rele
     if (source.get(f"{prefix}nanobot/_build_commit.txt") != commit_bytes
             or not source.get(f"{prefix}nanobot/web/dist/index.html")):
         raise ValueError("Source distribution must contain the candidate commit and built WebUI")
-    records = []
+    records: list[ReleaseArtifact] = []
     for name in sorted(expected):
         path = artifacts / name
         with path.open("rb") as stream:
@@ -179,16 +180,30 @@ def verify_candidate(root: Path, artifacts: Path, *, source_commit: str) -> Rele
     )
 
 
-def write_manifest(manifest: ReleaseManifest, output: Path) -> None:
-    payload = manifest.model_dump_json(indent=2) + "\n"
+def _write_candidate_text(payload: str, output: Path) -> None:
     if output.exists():
         if output.read_text(encoding="utf-8") == payload:
             return
-        raise FileExistsError("Existing manifest differs; do not overwrite a release candidate")
-    with tempfile.TemporaryDirectory(prefix=".manifest-", dir=output.parent) as temporary:
-        candidate = Path(temporary) / "manifest.json"
+        raise FileExistsError(f"Existing {output.name} differs; do not overwrite candidate evidence")
+    with tempfile.TemporaryDirectory(prefix=".candidate-report-", dir=output.parent) as temporary:
+        candidate = Path(temporary) / "report"
         candidate.write_text(payload, encoding="utf-8")
         output.hardlink_to(candidate)
+
+
+def write_manifest(manifest: ReleaseManifest, output: Path) -> None:
+    _write_candidate_text(manifest.model_dump_json(indent=2) + "\n", output)
+
+
+def write_install_guide(root: Path, artifacts: Path, output: Path, *, source_commit: str) -> None:
+    """Reverify the immutable upload set before emitting a manual installation handoff."""
+    if output.resolve().is_relative_to(artifacts.resolve()):
+        raise ValueError("Install guide must be outside the immutable artifact directory")
+    recorded = ReleaseManifest.model_validate_json((artifacts / "release-manifest.json").read_bytes())
+    manifest = verify_candidate(root, artifacts, source_commit=source_commit)
+    if recorded != manifest:
+        raise ValueError("Candidate differs from its recorded release manifest")
+    _write_candidate_text(render_install_guide(manifest), output)
 
 
 def assemble_candidate(root: Path, output: Path, *, wheel: Path, sdist: Path,
@@ -220,6 +235,10 @@ def main() -> None:
     verify = commands.add_parser("verify")
     verify.add_argument("--source-commit", required=True)
     verify.add_argument("--artifacts", type=Path, required=True)
+    instructions = commands.add_parser("instructions")
+    instructions.add_argument("--source-commit", required=True)
+    instructions.add_argument("--artifacts", type=Path, required=True)
+    instructions.add_argument("--output", type=Path, required=True)
     assemble = commands.add_parser("assemble")
     assemble.add_argument("--source-commit", required=True)
     assemble.add_argument("--wheel", type=Path, required=True)
@@ -234,6 +253,9 @@ def main() -> None:
         manifest = verify_candidate(args.root, args.artifacts, source_commit=args.source_commit)
         write_manifest(manifest, args.artifacts / "release-manifest.json")
         print(manifest.model_dump_json(indent=2))
+    elif args.command == "instructions":
+        write_install_guide(args.root, args.artifacts, args.output, source_commit=args.source_commit)
+        print(f"Candidate install handoff: {args.output}")
     else:
         manifest = assemble_candidate(args.root, args.output, wheel=args.wheel, sdist=args.sdist,
                                       tui_dir=args.tui_dir, source_commit=args.source_commit)

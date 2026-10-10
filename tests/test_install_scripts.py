@@ -8,6 +8,7 @@ import base64
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -15,14 +16,20 @@ from pathlib import Path
 from zipfile import ZipFile
 
 import pytest
+from packaging.tags import sys_tags
+
+from nanobot import releases
+from scripts.release_install_guide import install_command, verification_command
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 WINDOWS = os.name == "nt"
 BASE_PYTHON = sys._base_executable
 
 
-def _wheel(directory, version):
-    metadata = f"nanobot_ai-{version}.dist-info"
+def _wheel(directory, version, *, platform="any", package="nanobot-ai"):
+    module = package.replace("-", "_") if package != "nanobot-ai" else "nanobot"
+    wheel_name = package.replace("-", "_")
+    metadata = f"{wheel_name}-{version}.dist-info"
     files = {
         "nanobot/__init__.py": f'__version__ = "{version}"\n',
         "nanobot/__main__.py": """
@@ -44,8 +51,13 @@ if __name__ == "__main__":
         f"{metadata}/WHEEL": "Wheel-Version: 1.0\nGenerator: installer-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
         f"{metadata}/entry_points.txt": "[console_scripts]\nnanobot = nanobot.__main__:main\n",
     }
+    files = {name.replace("nanobot/", f"{module}/"): content for name, content in files.items()}
+    files[f"{module}/__main__.py"] = files[f"{module}/__main__.py"].replace("nanobot", module)
+    files[f"{metadata}/METADATA"] = files[f"{metadata}/METADATA"].replace("Name: nanobot-ai", f"Name: {package}")
+    files[f"{metadata}/WHEEL"] = files[f"{metadata}/WHEEL"].replace("py3-none-any", f"py3-none-{platform}")
+    files[f"{metadata}/entry_points.txt"] = f"[console_scripts]\n{module} = {module}.__main__:main\n"
     record = []
-    path = directory / f"nanobot_ai-{version}-py3-none-any.whl"
+    path = directory / f"{wheel_name}-{version}-py3-none-{platform}.whl"
     with ZipFile(path, "w") as wheel:
         for name, content in files.items():
             data = content.encode()
@@ -239,3 +251,114 @@ def test_dry_run_does_not_create_tool_environment(sandbox):
     assert "persistent uv tool environment" in result.stdout
     assert not (sandbox["root"] / "uv-tools").exists()
     assert "INSTALLER_PROBE" not in result.stdout
+
+
+def _preview_manifest(sandbox, *, damaged_hash=False):
+    version = "0.0.2.dev1"
+    platform = next(tag.platform for tag in sys_tags()
+                    if tag.platform in releases.PLATFORMS.values())
+    wheel = _wheel(sandbox["cwd"], version, platform=platform)
+    digest = "0" * 64 if damaged_hash else hashlib.sha256(wheel.read_bytes()).hexdigest()
+    artifacts = [releases.ReleaseArtifact(
+        filename=name, size=wheel.stat().st_size if name == wheel.name else 123,
+        sha256=digest if name == wheel.name else "c" * 64,
+    ) for name in sorted(releases.release_filenames(version))]
+    manifest = releases.ReleaseManifest(version=version, source_commit="a" * 40,
+                                         candidate_commit="b" * 40, requires_python=">=3.11",
+                                         artifacts=artifacts)
+    return manifest, next(item for item in artifacts if item.filename == wheel.name)
+
+
+def _owner_environment(sandbox, owner, *, existing):
+    _wheel(sandbox["wheels"], "0.0.1")
+    if owner == "pip":
+        prefix = sandbox["root"] / "ordinary-venv"
+        _run([BASE_PYTHON, "-I", "-m", "venv", str(prefix)], sandbox)
+        executable = str(_python(prefix))
+        if existing:
+            _run([executable, "-I", "-m", "pip", "install", "nanobot-ai"], sandbox)
+    else:
+        executable = _expose(sandbox, owner)
+        prefix = sandbox["root"] / ("uv-tools/nanobot-ai" if owner == "uv" else "pipx/venvs/nanobot-ai")
+        sandbox["env"]["UV_PYTHON"] = BASE_PYTHON
+        if existing:
+            _installer(sandbox)
+    return executable, prefix
+
+
+def _verify_owner(sandbox, owner, prefix):
+    if owner == "pip":
+        return _identity(_run([str(_python(prefix)), "-I", "-m", "nanobot", "--version"], sandbox))
+    command = verification_command(owner, windows=WINDOWS)
+    shell = ["powershell", "-NoProfile", "-NonInteractive", "-Command"] if WINDOWS else ["/bin/sh", "-c"]
+    return _identity(_run([*shell, command], sandbox))
+
+
+def _run_guide_command(sandbox, command, python, *, check=True):
+    """Run the same multiline command users copy, including shell quoting."""
+    if WINDOWS:
+        value = str(python).replace("'", "''")
+        prelude = f"Set-Alias -Name python -Value '{value}'\n"
+        shell = ["powershell", "-NoProfile", "-NonInteractive", "-Command"]
+    else:
+        prelude = f'python() {{ {shlex.quote(str(python))} "$@"; }}\n'
+        shell = ["/bin/sh", "-c"]
+    return _run([*shell, prelude + shlex.join(command)], sandbox, check=check)
+
+
+@pytest.mark.parametrize("owner", ["uv", "pipx", "pip"])
+@pytest.mark.parametrize("existing", [False, True], ids=["fresh", "existing"])
+def test_generated_exact_preview_commands_use_persistent_owner(sandbox, owner, existing):
+    _, prefix = _owner_environment(sandbox, owner, existing=existing)
+    manifest, artifact = _preview_manifest(sandbox)
+    command = install_command(manifest, artifact, owner=owner, existing=existing)
+    _run_guide_command(sandbox, command, _python(prefix) if owner == "pip" else BASE_PYTHON)
+    identity = _verify_owner(sandbox, owner, prefix)
+    assert identity["version"] == manifest.version
+    assert Path(identity["prefix"]).resolve() == prefix
+    assert Path(identity["package"]).resolve().is_relative_to(prefix)
+    assert identity["isolated"] == 1
+
+
+@pytest.mark.parametrize("owner", ["uv", "pipx", "pip"])
+def test_generated_command_hash_failure_leaves_existing_version(sandbox, owner):
+    _, prefix = _owner_environment(sandbox, owner, existing=True)
+    manifest, artifact = _preview_manifest(sandbox, damaged_hash=True)
+    command = install_command(manifest, artifact, owner=owner, existing=True)
+    result = _run_guide_command(sandbox, command, _python(prefix) if owner == "pip" else BASE_PYTHON, check=False)
+    assert result.returncode != 0
+    assert "no package manager was started" in result.stderr
+    assert _verify_owner(sandbox, owner, prefix)["version"] == "0.0.1"
+
+
+@pytest.mark.parametrize("owner", ["uv", "pipx"])
+def test_exact_preview_does_not_silently_remove_manager_pin(sandbox, owner):
+    executable, prefix = _owner_environment(sandbox, owner, existing=False)
+    if owner == "uv":
+        _run([executable, "tool", "install", "nanobot-ai==0.0.1"], sandbox)
+    else:
+        _run([executable, "install", "--skip-maintenance", "nanobot-ai"], sandbox)
+        _run([executable, "pin", "nanobot-ai"], sandbox)
+    manifest, artifact = _preview_manifest(sandbox)
+    command = install_command(manifest, artifact, owner=owner, existing=True)
+    result = _run_guide_command(sandbox, command, BASE_PYTHON, check=False)
+    # uv rejects the constraint conflict; pipx successfully skips a pinned tool.
+    assert (result.returncode == 0) == (owner == "pipx")
+    assert _verify_owner(sandbox, owner, prefix)["version"] == "0.0.1"
+
+
+def test_exact_pipx_target_preserves_injected_package_and_records_new_spec(sandbox):
+    pipx, prefix = _owner_environment(sandbox, "pipx", existing=True)
+    _wheel(sandbox["wheels"], "1.0.0", package="fixture-helper")
+    _run([pipx, "inject", "--skip-maintenance", "nanobot-ai", "fixture-helper"], sandbox)
+    receipt = prefix / "pipx_metadata.json"
+    before = json.loads(receipt.read_text())
+    manifest, artifact = _preview_manifest(sandbox)
+    command = install_command(manifest, artifact, owner="pipx", existing=True)
+    _run_guide_command(sandbox, command, BASE_PYTHON)
+    after = json.loads(receipt.read_text())
+    assert after["injected_packages"] == before["injected_packages"]
+    assert after["source_interpreter"] == before["source_interpreter"]
+    assert after["main_package"]["package_or_url"] == f"nanobot-ai @ {(sandbox['cwd'] / artifact.filename).as_uri()}"
+    _run([str(_python(prefix)), "-I", "-c", "import fixture_helper"], sandbox)
+    assert _verify_owner(sandbox, "pipx", prefix)["version"] == manifest.version
