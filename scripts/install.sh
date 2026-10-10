@@ -8,8 +8,10 @@ dry_run="0"
 nanobot_python=""
 release_wheel=""
 release_sha256=""
-release_requested="0"
+release_kind=""
 expected_version=""
+release_version=""
+manifest_sha256=""
 
 info() {
   printf '%s\n' "$*"
@@ -39,12 +41,15 @@ install_failure_hint() {
 usage() {
   cat <<'EOF'
 Usage: install.sh [--dry-run] [--wheel PATH --sha256 HASH]
+       install.sh [--dry-run] --release VERSION --manifest-sha256 HASH
 
 By default this installs or upgrades nanobot-ai from PyPI.
 Use --dry-run to print what would happen without installing or starting setup.
 For a verified release handoff, use --wheel and --sha256 together. Keep that
 downloaded wheel in place; your manager may record it as the installation source.
 Stop affected gateways and back up their data before updating an existing install.
+--release downloads the matching platform wheel from the official release using
+its published manifest hash. This selects one version, not a Preview subscription.
 
 For current main, clone the repository and run `python -m pip install -e .`.
 EOF
@@ -210,7 +215,7 @@ install_with_pipx() {
   tool_dir="$(pipx environment --value PIPX_LOCAL_VENVS)" || fail "Could not locate the pipx environments directory"
   [ -n "$tool_dir" ] || fail "pipx returned an empty environments directory"
   if [ -f "$tool_dir/$package/pipx_metadata.json" ]; then
-    if [ -n "$release_wheel" ]; then
+    if [ -n "$expected_version" ]; then
       pipx install --skip-maintenance --upgrade "$install_target" || fail "pipx could not upgrade nanobot. Resolve the error above and retry; no other installation was attempted."
     else
       pipx upgrade "$package" || fail "pipx could not upgrade nanobot. Resolve the error above and retry; no other installation was attempted."
@@ -275,10 +280,17 @@ PY
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --wheel|--sha256)
+    --wheel|--sha256|--release|--manifest-sha256)
       [ "$#" -ge 2 ] || fail "$1 requires a value"
-      release_requested="1"
-      if [ "$1" = "--wheel" ]; then release_wheel="$2"; else release_sha256="$2"; fi
+      case "$1" in --wheel|--sha256) wanted_kind="wheel" ;; *) wanted_kind="release" ;; esac
+      [ -z "$release_kind" ] || [ "$release_kind" = "$wanted_kind" ] || fail "Choose --release or --wheel, not both"
+      release_kind="$wanted_kind"
+      case "$1" in
+        --wheel) release_wheel="$2" ;;
+        --sha256) release_sha256="$2" ;;
+        --release) release_version="$2" ;;
+        --manifest-sha256) manifest_sha256="$2" ;;
+      esac
       shift
       ;;
     --dev)
@@ -313,11 +325,26 @@ fi
 info "Using Python: $("$python_bin" --version 2>&1)"
 select_install_method
 
-if [ "$release_requested" = "1" ]; then
-  [ -n "$release_wheel" ] && [ -n "$release_sha256" ] || fail "--wheel and --sha256 must be supplied together"
+if [ -n "$release_kind" ]; then
+  if [ "$release_kind" = "release" ]; then
+    [ -n "$release_version" ] && [ -n "$manifest_sha256" ] || fail "--release and --manifest-sha256 must be supplied together"
+    [ -z "$release_wheel$release_sha256" ] || fail "Choose --release or --wheel, not both"
+    [ -n "${HOME:-}" ] || fail "HOME is required to retain the downloaded release"
+  else
+    [ -n "$release_wheel" ] && [ -n "$release_sha256" ] || fail "--wheel and --sha256 must be supplied together"
+  fi
+  target_python="$python_bin"
+  case "$install_method" in
+    uv) [ ! -x "$uv_dir/$package/bin/python" ] || target_python="$uv_dir/$package/bin/python" ;;
+    pipx) [ ! -x "$pipx_dir/$package/bin/python" ] || target_python="$pipx_dir/$package/bin/python" ;;
+    managed)
+      candidate_python="${NANOBOT_VENV:-${HOME:-}/.nanobot/venv}/bin/python"
+      [ ! -x "$candidate_python" ] || target_python="$candidate_python"
+      ;;
+  esac
   owner_record="-"
   if [ "$install_method" = "pipx" ]; then owner_record="$pipx_dir/$package/pipx_metadata.json"; fi
-  wheel_identity="$("$python_bin" -I - "$release_wheel" "$release_sha256" "$owner_record" <<'PY'
+  wheel_identity="$("$target_python" -I - "$release_wheel" "$release_sha256" "$owner_record" "$release_version" "$manifest_sha256" "${NANOBOT_RELEASE_CACHE:-${HOME:-}/.nanobot/downloads/releases}" "$dry_run" <<'PY'
 import hashlib
 import json
 import re
@@ -326,12 +353,144 @@ from email.parser import BytesParser
 from pathlib import Path
 from zipfile import ZipFile
 
-path = Path(sys.argv[1]).absolute()
+import os
+import platform
+import struct
+import sysconfig
+import tempfile
+from urllib.parse import urlsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
+
+# Bootstrap has no installed nanobot/packaging dependency. This closed platform
+# set matches the five published wheel tags; the owner still checks compatibility.
+def native_platform():
+    if struct.calcsize("P") != 8:
+        raise SystemExit("No native release wheel is available for 32-bit Python")
+    machine = platform.machine().lower()
+    if sys.platform == "darwin":
+        if int(platform.mac_ver()[0].split(".")[0]) < 13:
+            raise SystemExit("The native release requires macOS 13 or newer")
+        if machine in ("arm64", "x86_64"):
+            return "macosx_13_0_" + machine
+    elif sys.platform == "linux":
+        try:
+            libc = os.confstr("CS_GNU_LIBC_VERSION") or ""
+        except (ValueError, OSError):
+            libc = ""
+        if not re.fullmatch(r"glibc \d+\.\d+", libc) or tuple(map(int, libc.split()[1].split("."))) < (2, 17):
+            raise SystemExit("The native release requires glibc 2.17+; no musl wheel is published")
+        if machine in ("aarch64", "x86_64"):
+            return "manylinux_2_17_" + machine
+    elif sys.platform == "win32" and sysconfig.get_platform() == "win-amd64":
+        return "win_amd64"
+    raise SystemExit("No native release wheel is published for this Python platform")
+
+def checked_url(url):
+    parsed = urlsplit(url)
+    if (parsed.scheme != "https" or parsed.hostname not in
+            {"github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com"}
+            or parsed.username is not None or parsed.password is not None
+            or parsed.port not in (None, 443) or parsed.fragment):
+        raise SystemExit("Release download redirected outside the approved HTTPS hosts")
+    return url
+
+class ReleaseRedirect(HTTPRedirectHandler):
+    max_redirections = 4
+    max_repeats = 1
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        checked_url(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+def fetch_release(version, manifest_hash, cache, dry_run):
+    number = r"(?:0|[1-9]\d*)"
+    if not re.fullmatch(rf"{number}\.{number}\.{number}(?:\.dev{number}|\.post{number})?", version):
+        raise SystemExit("Expected a canonical release version, not a branch or URL")
+    if not re.fullmatch(r"[0-9a-f]{64}", manifest_hash):
+        raise SystemExit("A trusted published manifest SHA-256 is required")
+    selected_platform = native_platform()
+    base = "https://github.com/HKUDS/nanobot/releases/download/v" + version + "/"
+    opener = build_opener(ReleaseRedirect())
+    with opener.open(Request(checked_url(base + "release-manifest.json"),
+                             headers={"Accept-Encoding": "identity"}), timeout=20) as response:
+        payload = response.read(64 * 1024 + 1)
+    if len(payload) > 64 * 1024 or hashlib.sha256(payload).hexdigest() != manifest_hash:
+        raise SystemExit("Release manifest size or SHA-256 mismatch")
+    manifest = json.loads(payload)
+    if (not isinstance(manifest, dict) or type(manifest.get("schema_version")) is not int
+            or manifest["schema_version"] != 1 or manifest.get("version") != version
+            or set(manifest) != {"schema_version", "version", "source_commit", "candidate_commit",
+                                 "requires_python", "artifacts"}):
+        raise SystemExit("Unsupported or mismatched release manifest")
+    for key in ("source_commit", "candidate_commit"):
+        if not isinstance(manifest[key], str) or not re.fullmatch(r"[0-9a-f]{40}", manifest[key]):
+            raise SystemExit("Invalid release commit identity")
+    if not isinstance(manifest["requires_python"], str) or not 0 < len(manifest["requires_python"]) <= 200:
+        raise SystemExit("Invalid Python requirement in release manifest")
+    targets = {"darwin-arm64": "macosx_13_0_arm64", "darwin-x64": "macosx_13_0_x86_64",
+               "linux-arm64": "manylinux_2_17_aarch64", "linux-x64": "manylinux_2_17_x86_64",
+               "win32-x64": "win_amd64"}
+    expected = {f"nanobot_ai-{version}-py3-none-{tag}.whl" for tag in targets.values()}
+    expected.add(f"nanobot_ai-{version}.tar.gz")
+    for target in targets:
+        name = "nanobot-tui-" + target + (".exe" if target == "win32-x64" else "") + ".zip"
+        expected.update((name, name + ".sha256"))
+    artifacts = manifest["artifacts"]
+    if (not isinstance(artifacts, list) or len(artifacts) != 16
+            or any(not isinstance(item, dict) or set(item) != {"filename", "size", "sha256"}
+                   or not isinstance(item["filename"], str) or type(item["size"]) is not int
+                   or not 0 < item["size"] <= 2 * 1024**3
+                   or not isinstance(item["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", item["sha256"])
+                   for item in artifacts)
+            or {item["filename"] for item in artifacts} != expected):
+        raise SystemExit("Release manifest does not contain the complete matching artifact set")
+    filename = f"nanobot_ai-{version}-py3-none-{selected_platform}.whl"
+    artifact = next(item for item in artifacts if item["filename"] == filename)
+    if dry_run:
+        print("nanobot-ai @ " + base + filename + "#sha256=" + artifact["sha256"] + "|" + version)
+        raise SystemExit(0)
+    directory = Path(cache).expanduser().absolute() / version / artifact["sha256"]
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    destination = directory / filename
+    if destination.exists() or destination.is_symlink():
+        if destination.is_symlink() or not destination.is_file() or destination.stat().st_size != artifact["size"]:
+            raise SystemExit("Invalid cached release file; inspect the release download directory")
+        return destination, artifact["sha256"]
+    descriptor, name = tempfile.mkstemp(prefix=".download-", suffix=".part", dir=directory)
+    temporary = Path(name)
+    try:
+        size = 0
+        digest = hashlib.sha256()
+        with os.fdopen(descriptor, "wb") as output:
+            with opener.open(Request(checked_url(base + filename),
+                                     headers={"Accept-Encoding": "identity"}), timeout=20) as response:
+                while chunk := response.read(64 * 1024):
+                    size += len(chunk)
+                    if size > artifact["size"]:
+                        raise SystemExit("Release wheel exceeds its verified size")
+                    digest.update(chunk)
+                    output.write(chunk)
+        if size != artifact["size"] or digest.hexdigest() != artifact["sha256"]:
+            raise SystemExit("Release wheel size or SHA-256 mismatch")
+        try:
+            os.link(temporary, destination)
+        except FileExistsError:
+            if destination.is_symlink() or not destination.is_file() or destination.stat().st_size != size:
+                raise SystemExit("The cached release destination changed during download")
+        return destination, artifact["sha256"]
+    finally:
+        temporary.unlink(missing_ok=True)
+
+expected_hash = sys.argv[2]
+if sys.argv[4] not in ("", "-"):
+    path, expected_hash = fetch_release(sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7] == "1")
+else:
+    path = Path(sys.argv[1]).absolute()
 match = re.fullmatch(r"nanobot_ai-(\d+\.\d+\.\d+(?:\.dev\d+|\.post\d+)?)-py3-none-(macosx_13_0_(?:arm64|x86_64)|manylinux_2_17_(?:aarch64|x86_64)|win_amd64)\.whl", path.name)
-if not match or path.is_symlink() or not path.is_file() or not re.fullmatch(r"[0-9a-f]{64}", sys.argv[2]):
+if not match or path.is_symlink() or not path.is_file() or not re.fullmatch(r"[0-9a-f]{64}", expected_hash):
     raise SystemExit("Expected a saved native nanobot wheel and its published SHA-256")
 with path.open("rb") as stream:
-    if hashlib.file_digest(stream, "sha256").hexdigest() != sys.argv[2]:
+    if hashlib.file_digest(stream, "sha256").hexdigest() != expected_hash:
         raise SystemExit("Wheel SHA-256 mismatch; no package manager was started")
 version = match[1]
 with ZipFile(path) as wheel:
@@ -364,7 +523,11 @@ PY
   install_target="${wheel_identity%|*}"
   expected_version="${wheel_identity##*|}"
   install_source="verified wheel $expected_version"
-  info "Verified nanobot $expected_version. Keep the downloaded wheel at its current path."
+  if [ "$release_kind" = "release" ] && [ "$dry_run" = "1" ]; then
+    info "Selected nanobot $expected_version from verified release metadata; its wheel was not downloaded."
+  else
+    info "Verified nanobot $expected_version. Keep the downloaded wheel at its current path."
+  fi
 fi
 
 if [ "$dry_run" = "1" ]; then

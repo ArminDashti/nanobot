@@ -106,9 +106,25 @@ to install that target, not as a successful update. Keep the downloaded wheel at
 original path because the manager can record it as the installation source. Use trusted
 release metadata for the hash; a checksum alone does not authenticate an unknown publisher.
 
-This is the installer-side handoff for a selected artifact, not yet automatic Preview
-discovery/download or a channel subscription. Use scripts that actually contain these
-options; older installers do not. It does not stop gateways or back up data. Stop affected
+For automatic platform selection of one published version, use `install.sh --release
+<version> --manifest-sha256 <trusted-manifest-hash>` or `install.ps1 -Release <version>
+-ManifestSha256 <trusted-manifest-hash>`. These options read the official release's
+complete manifest, select the native wheel for the target installation's Python, and
+verify size, SHA-256 and wheel identity before invoking the original owner. Downloads
+use the official GitHub HTTPS hosts and the user's configured HTTPS proxy. Verified
+wheels remain under `~/.nanobot/downloads/releases` (override with
+`NANOBOT_RELEASE_CACHE`); failed partial downloads are removed. Do not remove a cache
+file while a manager still records it as its installation source.
+
+The five supported platform tags are a closed bootstrap set; no extra Python package
+or frontend toolchain is installed to choose a wheel. The package manager still checks
+the target's Python and dependency requirements. In release mode, `--dry-run` / `-DryRun`
+fetches and validates only the manifest: no wheel, cache, environment or setup is created.
+It does not claim that wheel bytes or dependency resolution have been checked.
+
+This is an exact-version handoff, not latest-Preview discovery or a channel subscription.
+Use scripts that actually contain these options; older installers do not. It does not
+stop gateways or back up data. Stop affected
 writers and complete a backup first. Plain pip environments still require explicit review
 of extras, and suffixed/custom installations require their own manager instructions.
 
@@ -169,7 +185,7 @@ native bundle/source correspondence and executable permissions. `verify --source
 <original-source-sha> --artifacts <artifact-directory>` rechecks the same candidate;
 it may reuse an identical manifest but never overwrite one with different bytes.
 
-Generate the initial manual installation handoff from that same candidate:
+Generate the installation handoff from that same candidate:
 
 ```bash
 python -m scripts.release_candidate instructions --source-commit <original-source-sha> \
@@ -178,14 +194,22 @@ python -m scripts.release_candidate instructions --source-commit <original-sourc
 
 This rechecks all artifacts against the candidate and retained manifest before writing
 commands. The guide is a review report outside the immutable upload directory;
-it cannot overwrite different earlier evidence. It includes the exact version, source
-and candidate commits, five platform wheels with hash-bound URLs, and separate new/existing
+it cannot overwrite different earlier evidence. When both candidate installers match
+the known implementation, it leads with macOS/Linux and Windows commands that download
+the installer from that exact candidate commit and pass the retained manifest's SHA-256.
+These select the platform automatically. Older candidates retain the manual handoff;
+the generator never points them to a mutable `main` script or assumes support for new flags.
+Publishing must also make the pinned installer source publicly reachable.
+
+The guide includes the exact version, source and candidate commits, five platform wheels
+with hash-bound URLs, and separate new/existing
 base-package commands for uv, pipx and an ordinary pip venv. Users save the selected wheel
 in a directory they own; the commands check its size and SHA-256 with the standard library
 before passing that local file to the manager. Do not rely on a URL hash fragment alone:
 the tested uv tool commands did not reject an incorrect fragment. Retain the saved wheel
 because a manager may record its path. No new manifest schema or installer executable is
-introduced. CI retains this guide alongside the other small reports.
+introduced. The manual commands are folded into an advanced section when the automatic
+entry is available. CI retains this guide alongside the other small reports.
 
 The guide is not publication approval or automatic channel selection. Before offering it
 to users, publish and verify the exact public files and add the release-specific changes,

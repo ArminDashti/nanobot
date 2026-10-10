@@ -199,11 +199,20 @@ def write_install_guide(root: Path, artifacts: Path, output: Path, *, source_com
     """Reverify the immutable upload set before emitting a manual installation handoff."""
     if output.resolve().is_relative_to(artifacts.resolve()):
         raise ValueError("Install guide must be outside the immutable artifact directory")
-    recorded = ReleaseManifest.model_validate_json((artifacts / "release-manifest.json").read_bytes())
+    payload = (artifacts / "release-manifest.json").read_bytes()
+    recorded = ReleaseManifest.model_validate_json(payload)
     manifest = verify_candidate(root, artifacts, source_commit=source_commit)
     if recorded != manifest:
         raise ValueError("Candidate differs from its recorded release manifest")
-    _write_candidate_text(render_install_guide(manifest), output)
+    # Older retained candidates may not have the bootstrap options. Only link a
+    # candidate's scripts when they are the known implementation shipped here.
+    bootstrap = all(
+        (root / "scripts" / name).is_file()
+        and (root / "scripts" / name).read_bytes() == (ROOT / "scripts" / name).read_bytes()
+        for name in ("install.sh", "install.ps1")
+    )
+    digest = hashlib.sha256(payload).hexdigest() if bootstrap else None
+    _write_candidate_text(render_install_guide(manifest, manifest_sha256=digest), output)
 
 
 def assemble_candidate(root: Path, output: Path, *, wheel: Path, sdist: Path,

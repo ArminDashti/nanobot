@@ -6,13 +6,21 @@ No gateway, model, user configuration or public package index is used by these t
 
 import base64
 import hashlib
+import io
 import json
 import os
+import platform
+import re
 import shlex
 import shutil
+import ssl
 import subprocess
 import sys
+import sysconfig
+import threading
 import tomllib
+import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -20,7 +28,7 @@ import pytest
 from packaging.tags import sys_tags
 
 from nanobot import releases
-from scripts.release_install_guide import install_command, verification_command
+from scripts.release_install_guide import bootstrap_commands, install_command, verification_command
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 WINDOWS = os.name == "nt"
@@ -476,3 +484,261 @@ def test_public_installer_wrong_platform_keeps_original_environment(sandbox):
     assert "retry this exact handoff" in result.stdout + result.stderr
     assert "uv tool install --force" not in result.stdout + result.stderr
     assert _verify_owner(sandbox, "pip", prefix)["version"] == "0.0.1"
+
+
+def _bootstrap_program(script):
+    source = (SCRIPTS / script).read_text()
+    if script.endswith(".sh"):
+        match = re.search(r"wheel_identity=[^\n]*<<'PY'\n(.*?)\nPY\n", source, re.S)
+        assert match is not None
+        return match[1]
+    return source.split("$Verify = @'\n", 1)[1].split("\n'@", 1)[0]
+
+
+@pytest.fixture
+def published_release(tmp_path, monkeypatch):
+    version = "0.0.2.dev1"
+    base = f"{releases.RELEASE_DOWNLOAD}/v{version}/"
+    payloads = {}
+    artifacts = []
+    for name in sorted(releases.release_filenames(version)):
+        if name.endswith(".whl"):
+            tag = name.removeprefix(f"nanobot_ai-{version}-py3-none-").removesuffix(".whl")
+            body = _wheel(tmp_path, version, platform=tag).read_bytes()
+        else:
+            body = b"not downloaded by the installer"
+        payloads[base + name] = body
+        artifacts.append(releases.ReleaseArtifact(filename=name, size=len(body),
+                                                  sha256=hashlib.sha256(body).hexdigest()))
+    manifest = releases.ReleaseManifest(version=version, source_commit="a" * 40,
+                                         candidate_commit="b" * 40, requires_python=">=3.11",
+                                         artifacts=artifacts)
+    payloads[base + "release-manifest.json"] = manifest.model_dump_json().encode()
+    requests = []
+
+    class Opener:
+        def open(self, request, *, timeout):
+            assert timeout == 20
+            requests.append(request.full_url)
+            return io.BytesIO(payloads[request.full_url])
+
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *_: Opener())
+    cache = tmp_path / "download cache 数据"
+
+    def run(script, *, dry_run=False, manifest_hash=None):
+        digest = manifest_hash or hashlib.sha256(payloads[base + "release-manifest.json"]).hexdigest()
+        monkeypatch.setattr(sys, "argv", ["verify", "-", "-", "-", version, digest,
+                                         str(cache), "1" if dry_run else "0"])
+        namespace = {}
+        try:
+            exec(compile(_bootstrap_program(script), script, "exec"), namespace)
+        except SystemExit as exc:
+            if exc.code != 0:
+                raise
+        return namespace
+
+    return run, manifest, payloads, requests, cache
+
+
+@pytest.mark.parametrize("script", ["install.sh", "install.ps1"])
+@pytest.mark.parametrize("system,machine,expected", [
+    ("darwin", "arm64", "macosx_13_0_arm64"),
+    ("darwin", "x86_64", "macosx_13_0_x86_64"),
+    ("linux", "aarch64", "manylinux_2_17_aarch64"),
+    ("linux", "x86_64", "manylinux_2_17_x86_64"),
+    ("win32", "AMD64", "win_amd64"),
+])
+def test_bootstrap_downloads_only_target_wheel(published_release, monkeypatch, capsys, script, system, machine, expected):
+    run, manifest, payloads, requests, cache = published_release
+    monkeypatch.setattr(sys, "platform", system)
+    monkeypatch.setattr(platform, "machine", lambda: machine)
+    monkeypatch.setattr(platform, "mac_ver", lambda: ("15.0", ("", "", ""), machine))
+    monkeypatch.setattr(os, "confstr", lambda _: "glibc 2.17", raising=False)
+    monkeypatch.setattr(sysconfig, "get_platform", lambda: "win-amd64")
+    run(script)
+    filename = f"nanobot_ai-{manifest.version}-py3-none-{expected}.whl"
+    assert len(requests) == 2 and requests[-1].endswith("/" + filename)
+    files = list(cache.rglob("*.whl"))
+    assert len(files) == 1 and files[0].name == filename
+    assert files[0].read_bytes() == payloads[requests[-1]]
+    assert capsys.readouterr().out.strip() == f"nanobot-ai @ {files[0].as_uri()}|{manifest.version}"
+    run(script)
+    assert len(requests) == 3 and requests[-1].endswith("release-manifest.json")
+    assert not list(cache.rglob("*.part"))
+
+
+@pytest.mark.parametrize("script", ["install.sh", "install.ps1"])
+def test_bootstrap_dry_run_has_no_wheel_or_cache_writes(published_release, capsys, script):
+    run, manifest, _, requests, cache = published_release
+    namespace = run(script, dry_run=True)
+    assert len(requests) == 1 and not cache.exists()
+    assert f"|{manifest.version}" in capsys.readouterr().out
+    assert namespace["native_platform"]() in {tag.platform for tag in sys_tags()}
+
+
+@pytest.mark.parametrize("script", ["install.sh", "install.ps1"])
+def test_bootstrap_bad_manifest_hash_never_downloads_wheel(published_release, script):
+    run, _, _, requests, cache = published_release
+    with pytest.raises(SystemExit, match="manifest size or SHA-256"):
+        run(script, manifest_hash="0" * 64)
+    assert len(requests) == 1 and not cache.exists()
+
+
+@pytest.mark.parametrize("script", ["install.sh", "install.ps1"])
+def test_bootstrap_damaged_download_is_not_retained(published_release, script):
+    run, manifest, payloads, requests, cache = published_release
+    for artifact in manifest.artifacts:
+        if artifact.filename.endswith(".whl"):
+            payloads[manifest.artifact_url(artifact).split("#")[0]] = b"truncated"
+    with pytest.raises(SystemExit, match="wheel size or SHA-256"):
+        run(script)
+    assert len(requests) == 2
+    assert not list(cache.rglob("*.whl")) and not list(cache.rglob("*.part"))
+
+
+@pytest.mark.parametrize("libc", ["", "glibc 2.16"])
+def test_bootstrap_does_not_download_a_glibc_wheel_for_incompatible_linux(published_release, monkeypatch, libc):
+    run, _, _, requests, cache = published_release
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "confstr", lambda _: libc, raising=False)
+    with pytest.raises(SystemExit, match="glibc 2.17"):
+        run("install.sh")
+    assert not requests and not cache.exists()
+
+
+@pytest.mark.parametrize("url", ["http://github.com/file", "https://example.com/file", "https://github.com:8443/file",
+                                 "https://user:password@github.com/file", "https://127.0.0.1/file"])
+def test_bootstrap_rejects_download_redirects_outside_project_hosts(published_release, url):
+    run, _, _, _, _ = published_release
+    namespace = run("install.sh", dry_run=True)
+    handler = namespace["ReleaseRedirect"]()
+    with pytest.raises(SystemExit, match="approved HTTPS hosts"):
+        handler.redirect_request(urllib.request.Request("https://github.com/file"), None, 302, "Found", {}, url)
+
+
+@pytest.fixture
+def release_https(published_release, tmp_path):
+    """Real HTTPS via a private CONNECT proxy; never contacts GitHub or other hosts."""
+    openssl = shutil.which("openssl")
+    if not openssl:
+        pytest.skip("OpenSSL is required for the isolated HTTPS installer check")
+    cert, key = tmp_path / "test-ca.pem", tmp_path / "test-ca-key.pem"
+    subprocess.run([openssl, "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                    "-keyout", str(key), "-out", str(cert), "-days", "1", "-subj", "/CN=github.com",
+                    "-addext", "subjectAltName=DNS:github.com,DNS:raw.githubusercontent.com"], check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(cert, key)
+    _, manifest, payloads, _, _ = published_release
+    requests = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_CONNECT(self):  # noqa: N802 -- stdlib protocol method
+            if self.path not in {"github.com:443", "raw.githubusercontent.com:443"}:
+                self.send_error(403)
+                return
+            self.send_response(200)
+            self.end_headers()
+            self.connection.settimeout(10)
+            self.connection = context.wrap_socket(self.connection, server_side=True)
+            self.rfile = self.connection.makefile("rb")
+            self.wfile = self.connection.makefile("wb")
+            self.handle_one_request()
+            self.close_connection = True
+
+        def do_GET(self):  # noqa: N802 -- stdlib protocol method
+            url = "https://" + self.headers["Host"] + self.path
+            requests.append(url)
+            if url not in payloads:
+                self.send_error(404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(payloads[url])))
+            self.end_headers()
+            self.wfile.write(payloads[url])
+            self.wfile.flush()
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        digest = hashlib.sha256(payloads[f"{releases.RELEASE_DOWNLOAD}/v{manifest.version}/release-manifest.json"]).hexdigest()
+        yield manifest, digest, payloads, requests, {
+            "HTTPS_PROXY": f"http://127.0.0.1:{server.server_address[1]}",
+            "SSL_CERT_FILE": str(cert), "NO_PROXY": "",
+            "CURL_CA_BUNDLE": str(cert),
+        }
+    finally:
+        server.shutdown()
+        thread.join(timeout=10)
+        server.server_close()
+
+
+def _release_arguments(version, digest):
+    return ["-Release" if WINDOWS else "--release", version,
+            "-ManifestSha256" if WINDOWS else "--manifest-sha256", digest]
+
+
+@pytest.mark.parametrize("owner", ["uv", "pipx", "managed"])
+@pytest.mark.parametrize("existing", [False, True], ids=["fresh", "existing"])
+def test_public_installer_download_to_owner_upgrade_over_https(sandbox, release_https, owner, existing):
+    manifest, digest, _, requests, network = release_https
+    if owner == "managed":
+        prefix = sandbox["root"] / "managed"
+        if existing:
+            _wheel(sandbox["wheels"], "0.0.1")
+            _installer(sandbox)
+    else:
+        _, prefix = _owner_environment(sandbox, owner, existing=existing)
+    sandbox["env"].update(network)
+    result = _installer(sandbox, *_release_arguments(manifest.version, digest))
+    identity = _identity(result)
+    assert identity["version"] == manifest.version
+    assert Path(identity["prefix"]).resolve() == prefix
+    assert len(requests) == 2
+    cached = list((sandbox["root"] / ".nanobot/downloads/releases").rglob("*.whl"))
+    assert len(cached) == 1 and requests[-1].endswith(cached[0].name)
+
+
+def test_public_installer_release_dry_run_over_https_is_read_only(sandbox, release_https):
+    manifest, digest, _, requests, network = release_https
+    sandbox["env"].update(network)
+    result = _installer(sandbox, "--dry-run", *_release_arguments(manifest.version, digest))
+    assert "its wheel was not downloaded" in result.stdout
+    assert len(requests) == 1
+    assert not (sandbox["root"] / "managed").exists()
+    assert not (sandbox["root"] / ".nanobot/downloads/releases").exists()
+
+
+def test_public_installer_damaged_https_download_never_updates_existing_package(sandbox, release_https):
+    manifest, digest, payloads, requests, network = release_https
+    _, prefix = _owner_environment(sandbox, "uv", existing=True)
+    for artifact in manifest.artifacts:
+        if artifact.filename.endswith(".whl"):
+            payloads[manifest.artifact_url(artifact).split("#")[0]] = b"damaged download"
+    sandbox["env"].update(network)
+    result = _installer(sandbox, *_release_arguments(manifest.version, digest), check=False)
+    assert result.returncode != 0 and "wheel size or SHA-256 mismatch" in result.stdout + result.stderr
+    assert len(requests) == 2
+    assert _verify_owner(sandbox, "uv", prefix)["version"] == "0.0.1"
+    cache = sandbox["root"] / ".nanobot/downloads/releases"
+    assert not list(cache.rglob("*.whl")) and not list(cache.rglob("*.part"))
+
+
+@pytest.mark.skipif(WINDOWS, reason="Unix bootstrap command; Windows installer is tested separately")
+def test_generated_bootstrap_command_downloads_and_upgrades_original_owner(sandbox, release_https):
+    manifest, digest, payloads, requests, network = release_https
+    _expose(sandbox, "curl")
+    _, prefix = _owner_environment(sandbox, "uv", existing=True)
+    installer_url = f"https://raw.githubusercontent.com/HKUDS/nanobot/{manifest.candidate_commit}/scripts/install.sh"
+    payloads[installer_url] = (SCRIPTS / "install.sh").read_bytes()
+    sandbox["env"].update(network)
+    unix, _ = bootstrap_commands(manifest, digest)
+    identity = _identity(_run(["/bin/sh", "-c", unix], sandbox))
+    assert identity["version"] == manifest.version
+    assert Path(identity["prefix"]).resolve() == prefix
+    assert requests[0] == installer_url and len(requests) == 3
+    assert not list(sandbox["root"].glob("*/install.sh"))

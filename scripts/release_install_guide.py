@@ -7,6 +7,7 @@ gates, not properties inferred from a manifest.
 
 from __future__ import annotations
 
+import re
 import shlex
 from typing import Literal
 
@@ -69,7 +70,31 @@ def verification_command(owner: Owner, *, windows: bool) -> str:
     return f'"$({directory})/nanobot-ai/bin/python" -I -m nanobot --version'
 
 
-def render_install_guide(manifest: ReleaseManifest) -> str:
+def bootstrap_commands(manifest: ReleaseManifest, manifest_sha256: str) -> tuple[str, str]:
+    """Pin the installer to the candidate and the download to verified manifest bytes."""
+    if not re.fullmatch(r"[0-9a-f]{64}", manifest_sha256):
+        raise ValueError("Use the verified release manifest SHA-256")
+    base = f"https://raw.githubusercontent.com/HKUDS/nanobot/{manifest.candidate_commit}/scripts"
+    unix = f'''(
+  installer_dir="$(mktemp -d)" || exit 1
+  trap 'rm -f "$installer_dir/install.sh"; rmdir "$installer_dir"' 0
+  curl --fail --silent --show-error --location --proto '=https' \\
+    '{base}/install.sh' -o "$installer_dir/install.sh" &&
+  sh "$installer_dir/install.sh" --release '{manifest.version}' \\
+    --manifest-sha256 '{manifest_sha256}'
+)'''
+    windows = f'''$Installer = Join-Path ([IO.Path]::GetTempPath()) ("nanobot-install-" + [guid]::NewGuid() + ".ps1")
+try {{
+    Invoke-WebRequest -UseBasicParsing -Uri '{base}/install.ps1' -OutFile $Installer -ErrorAction Stop
+    & $Installer -Release '{manifest.version}' -ManifestSha256 '{manifest_sha256}'
+    if ($LASTEXITCODE -ne 0) {{ throw "Installation did not complete; review the output above." }}
+}} finally {{
+    Remove-Item -LiteralPath $Installer -ErrorAction SilentlyContinue
+}}'''
+    return unix, windows
+
+
+def render_install_guide(manifest: ReleaseManifest, *, manifest_sha256: str | None = None) -> str:
     release_url = f"https://github.com/HKUDS/nanobot/releases/tag/v{manifest.version}"
     lines = [
         f"# Install nanobot {manifest.version}", "",
@@ -91,11 +116,12 @@ def render_install_guide(manifest: ReleaseManifest) -> str:
         "   Finish active tasks, stop all affected writers through that supervisor, and",
         "   back up nanobot configuration/sessions and the owner's install metadata.",
         "   Do not install into a running gateway or assume this guide performs a backup.",
-        "3. Choose the target computer's platform below, then **one** owner/operation.",
+        "3. Use automatic platform selection when offered below. For the manual route,",
+        "   choose the target computer's platform, then **one** owner/operation.",
         "   Fresh commands are only for a new install; existing commands must target the",
         "   same account and manager home. For pip, activate the intended ordinary venv",
         "   and verify `python` belongs to it; never use system Python or a uv/pipx venv.", "",
-        "4. Download the linked wheel into a directory you own and intend to keep. Open",
+        "4. For the manual route, download the linked wheel into a directory you own. Open",
         "   a terminal in that directory. Each command uses Python 3.11+ (`python`) to",
         "   verify the saved file's size and SHA-256 **before** starting the manager.",
         "   For uv/pipx this helper Python does not replace the tool's interpreter.",
@@ -110,6 +136,26 @@ def render_install_guide(manifest: ReleaseManifest) -> str:
         "This guide does not upgrade the manager. uv retains existing version constraints;",
         "pipx can skip a pinned/locked package successfully. A zero exit code alone does",
         "not prove the requested version was installed. Do not force/unpin automatically.", "",
+    ]
+    if manifest_sha256 is not None:
+        unix, windows = bootstrap_commands(manifest, manifest_sha256)
+        lines += [
+            "## Automatic platform selection", "",
+            "Run **one** command block on the computer to install or update, after the",
+            "checks above. It downloads this candidate's installer, preserves a recognized",
+            "existing installation owner and selects that Python environment's wheel.",
+            "It verifies the manifest, download size, hash and wheel identity before install.",
+            "Python/dependency compatibility is enforced by the manager; this command does",
+            "not provide a gateway maintenance window, backup or verified restart.", "",
+            "macOS / Linux (Python 3.11+ and curl):", "", "```sh", unix, "```", "",
+            "Windows (Python 3.11+ and PowerShell):", "", "```powershell", windows, "```", "",
+            "Do not bypass a system script-execution policy. Use your approved installation",
+            "route if this script is blocked. These commands target one release, not a",
+            "persistent Preview subscription. The downloaded wheel stays in the private",
+            "nanobot release cache because the original manager may retain its path.", "",
+            "<details>", "<summary>Manual platform and manager commands</summary>", "",
+        ]
+    lines += [
         "## Select the target platform", "",
         "Use the architecture of the target Python environment, not the browser. No musl",
         "or Windows ARM64 wheel is provided. x64 native TUI builds require SSE4.2.",
@@ -132,6 +178,8 @@ def render_install_guide(manifest: ReleaseManifest) -> str:
                       f"```{shell}", shlex.join(install_command(manifest, artifact, owner=owner, existing=True)),
                       "```", "", "Verify the version from this owner's persistent environment:", "",
                       f"```{shell}", verification_command(owner, windows=target == "win32-x64"), "```", ""]
+    if manifest_sha256 is not None:
+        lines += ["</details>", ""]
     lines += [
         "## Verify, restart and recover", "",
         f"The verification command must report `{manifest.version}`. If it reports another",
