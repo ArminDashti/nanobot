@@ -68,3 +68,47 @@ Keep an artifact manifest with the source commit, version, filenames, hashes, ch
 ## If a gate fails
 
 Do not publish to PyPI while a required TUI artifact or verification is missing. Keep the documentation's public `latest` on the previous stable version until the new version is usable. If a published package needs a correction, prepare a new version; do not silently replace the code behind an existing release tag. Stop all old processes and follow the documented session rollback procedure before downgrading a migrated installation.
+
+## Non-publishing preview preflight
+
+**Verify Release Candidate** is a manually dispatched preparation workflow, not an
+available Preview channel. It has read-only repository permission and never creates
+tags/releases, uploads to PyPI, or advances a release catalogue. It builds and structurally
+checks all five platform wheels, the source distribution and licensed fallback archives.
+It retains only the small identity/manifest reports for three days, not installable
+binaries. Cross-compilation is not native execution or release approval.
+
+To reproduce preparation locally, use a full source SHA and a new output directory
+outside the checkout. The example base/sequence are illustrative, not published versions:
+
+```bash
+python -m scripts.release_candidate prepare \
+  --source-commit <full-commit-sha> --base 0.3.6 --sequence 42 \
+  --output <new-candidate-directory>
+```
+
+This leaves the source checkout untouched and creates a candidate commit with only the
+package and fallback version changes. Identical source/base/sequence inputs produce the
+same candidate commit. Build Python distributions and all native targets from that
+candidate using the commands above. Then, from its directory:
+
+```bash
+python -m scripts.release_candidate assemble --source-commit <original-source-sha> \
+  --wheel <intermediates>/nanobot_ai-0.3.6.dev42-py3-none-any.whl \
+  --sdist <intermediates>/nanobot_ai-0.3.6.dev42.tar.gz \
+  --tui-dir tui/dist --output <new-artifact-directory>
+```
+
+Assembly refuses an existing output directory. It emits `release-manifest.json` only
+after checking the complete set, version/commit identity, WebUI presence, wheel RECORDs,
+native bundle/source correspondence and executable permissions. `verify --source-commit
+<original-source-sha> --artifacts <artifact-directory>` rechecks the same candidate;
+it may reuse an identical manifest but never overwrite one with different bytes.
+
+The candidate clone borrows Git objects from its source repository. Preserve that
+repository until the candidate is retained in an approved permanent ref; the temporary
+clone is not a durable source archive by itself. Partial assembly has no accepted manifest
+and must not be uploaded. Native launch, clean installation, upgrade/recovery, source-offer
+commitment and the final publication procedure remain required gates. Existing TUI
+publication now refuses to overwrite assets; recover missing uploads from the original
+verified files instead of rebuilding and replacing a public release.

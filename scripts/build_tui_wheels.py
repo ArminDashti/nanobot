@@ -22,17 +22,9 @@ from email.parser import BytesParser
 from pathlib import Path, PurePosixPath
 
 from nanobot.cli.tui_launcher import _verified_release_archive
+from nanobot.releases import PLATFORMS
 
 ROOT = Path(__file__).resolve().parents[1]
-# Minimums verified against BOTH the Bun executable and its embedded OpenTUI library.
-# Linux binaries use glibc, not musl; macOS binaries require macOS 13.
-PLATFORMS = {
-    "darwin-arm64": "macosx_13_0_arm64",
-    "darwin-x64": "macosx_13_0_x86_64",
-    "linux-arm64": "manylinux_2_17_aarch64",
-    "linux-x64": "manylinux_2_17_x86_64",
-    "win32-x64": "win_amd64",
-}
 
 
 def _digest(data: bytes) -> str:
@@ -73,10 +65,12 @@ def _verify_architecture(binary: bytes, target: str) -> None:
         raise ValueError(f"TUI executable architecture does not match {target}")
 
 
-def _base_files(wheel: Path, version: str) -> tuple[dict[str, bytes], dict[str, int], str]:
+def wheel_files(wheel: Path, version: str, *, platform: str = "any") -> tuple[dict[str, bytes], dict[str, int], str]:
+    """Verify identity and every RECORD entry for an intermediate or final wheel."""
     prefix = f"nanobot_ai-{version}"
-    if wheel.name != f"{prefix}-py3-none-any.whl":
-        raise ValueError(f"Expected the candidate's universal wheel ({version})")
+    if wheel.name != f"{prefix}-py3-none-{platform}.whl":
+        kind = "universal wheel" if platform == "any" else "platform wheel"
+        raise ValueError(f"Expected the candidate's {kind} ({version})")
     info_dir = f"{prefix}.dist-info"
     with zipfile.ZipFile(wheel) as archive:
         names = archive.namelist()
@@ -85,7 +79,7 @@ def _base_files(wheel: Path, version: str) -> tuple[dict[str, bytes], dict[str, 
         for name in names:
             path = PurePosixPath(name)
             if (path.is_absolute() or ".." in path.parts or "\\" in name
-                    or name.startswith("nanobot/tui/bin/")
+                    or (platform == "any" and name.startswith("nanobot/tui/bin/"))
                     or name.endswith(("/RECORD.jws", "/RECORD.p7s"))):
                 raise ValueError(f"Unexpected base wheel entry: {name}")
         files = {name: archive.read(name) for name in names if not name.endswith("/")}
@@ -93,8 +87,8 @@ def _base_files(wheel: Path, version: str) -> tuple[dict[str, bytes], dict[str, 
     metadata = BytesParser().parsebytes(files[f"{info_dir}/METADATA"])
     wheel_metadata = BytesParser().parsebytes(files[f"{info_dir}/WHEEL"])
     if (metadata["Name"] != "nanobot-ai" or metadata["Version"] != version
-            or wheel_metadata["Root-Is-Purelib"] != "true"
-            or wheel_metadata.get_all("Tag") != ["py3-none-any"]):
+            or wheel_metadata["Root-Is-Purelib"] != ("true" if platform == "any" else "false")
+            or wheel_metadata.get_all("Tag") != [f"py3-none-{platform}"]):
         raise ValueError("Base wheel metadata does not match the candidate")
     record = f"{info_dir}/RECORD"
     rows = list(csv.reader(io.StringIO(files[record].decode())))
@@ -107,15 +101,8 @@ def _base_files(wheel: Path, version: str) -> tuple[dict[str, bytes], dict[str, 
     return files, modes, info_dir
 
 
-def build_wheel(wheel: Path, tui_dir: Path, out_dir: Path, target: str, *,
-                root: Path = ROOT) -> Path:
-    """Fail closed on stale sources, damaged archives, or existing output files."""
-    version = tomllib.loads((root / "pyproject.toml").read_text())["project"]["version"]
-    tag = f"py3-none-{PLATFORMS[target]}"
-    output = out_dir / f"nanobot_ai-{version}-{tag}.whl"
-    if output.exists():
-        raise FileExistsError(output)
-    files, modes, info_dir = _base_files(wheel, version)
+def release_bundle(tui_dir: Path, target: str, *, root: Path = ROOT) -> dict[str, bytes]:
+    """Validate the archive, architecture and corresponding source once at its owner."""
     asset = f"nanobot-tui-{target}" + (".exe" if target.startswith("win32-") else "")
     archive = tui_dir / f"{asset}.zip"
     raw = archive.read_bytes()
@@ -132,6 +119,20 @@ def build_wheel(wheel: Path, tui_dir: Path, out_dir: Path, target: str, *,
     expected_source = source_packager["_source_archive"](root / "tui")
     if _source_files(bundle["nanobot-tui-source.tar.gz"]) != _source_files(expected_source):
         raise ValueError("TUI archive source does not match this release checkout; rebuild it")
+    return bundle
+
+
+def build_wheel(wheel: Path, tui_dir: Path, out_dir: Path, target: str, *,
+                root: Path = ROOT) -> Path:
+    """Fail closed on stale sources, damaged archives, or existing output files."""
+    version = tomllib.loads((root / "pyproject.toml").read_text())["project"]["version"]
+    tag = f"py3-none-{PLATFORMS[target]}"
+    output = out_dir / f"nanobot_ai-{version}-{tag}.whl"
+    if output.exists():
+        raise FileExistsError(output)
+    files, modes, info_dir = wheel_files(wheel, version)
+    asset = f"nanobot-tui-{target}" + (".exe" if target.startswith("win32-") else "")
+    bundle = release_bundle(tui_dir, target, root=root)
     for name, content in bundle.items():
         path = f"nanobot/tui/bin/{name}"
         files[path] = content

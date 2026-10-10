@@ -7,6 +7,7 @@ import json
 import runpy
 import stat
 import struct
+import subprocess
 import tarfile
 import tomllib
 import zipfile
@@ -17,6 +18,7 @@ import pytest
 
 from nanobot.cli import tui_launcher
 from scripts import build_tui_wheels as packager
+from scripts.release_candidate import verify_candidate, write_manifest
 
 
 @pytest.fixture
@@ -186,3 +188,60 @@ def test_installed_tui_never_downloads_or_requires_bun(tmp_path, monkeypatch, sy
     cache = tmp_path / "empty-cache"
     assert tui_launcher.resolve_tui_command(data_dir=cache) == [str(binary)]
     assert not cache.exists()
+
+
+def test_complete_manifest_binds_wheels_sdist_and_fallback_archives(tmp_path, candidate):
+    """Real archive/RECORD checks, with synthetic binaries (not native execution)."""
+    root = tmp_path / "checkout"
+    subprocess.run(["git", "clone", "--shared", str(packager.ROOT), str(root)],
+                   check=True, capture_output=True)
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    metadata = tomllib.loads((root / "pyproject.toml").read_text())["project"]
+    wheel, info = candidate
+    with zipfile.ZipFile(wheel) as archive:
+        files = {name: archive.read(name) for name in archive.namelist()}
+    files[f"{info}/METADATA"] += f'Requires-Python: {metadata["requires-python"]}\n'.encode()
+    files["nanobot/_build_commit.txt"] = f"{commit}\n".encode()
+    files["nanobot/web/dist/index.html"] = b"<html>compiled fixture</html>"
+    record = io.StringIO()
+    writer = csv.writer(record)
+    for name, content in files.items():
+        if not name.endswith("/RECORD"):
+            writer.writerow((name, packager._digest(content), len(content)))
+    writer.writerow((f"{info}/RECORD", "", ""))
+    files[f"{info}/RECORD"] = record.getvalue().encode()
+    with zipfile.ZipFile(wheel, "w") as archive:
+        for name, content in files.items():
+            archive.writestr(name, content)
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    for target in packager.PLATFORMS:
+        make_bundle(artifacts, target)
+        packager.build_wheel(wheel, artifacts, artifacts, target, root=root)
+    version = metadata["version"]
+    source_files = {
+        "PKG-INFO": files[f"{info}/METADATA"],
+        "pyproject.toml": (root / "pyproject.toml").read_bytes(),
+        "nanobot/__init__.py": (root / "nanobot/__init__.py").read_bytes(),
+        "nanobot/_build_commit.txt": files["nanobot/_build_commit.txt"],
+        "nanobot/web/dist/index.html": files["nanobot/web/dist/index.html"],
+    }
+    with tarfile.open(artifacts / f"nanobot_ai-{version}.tar.gz", "w:gz") as archive:
+        for name, data in source_files.items():
+            member = tarfile.TarInfo(f"nanobot_ai-{version}/{name}")
+            member.size = len(data)
+            archive.addfile(member, io.BytesIO(data))
+    manifest = verify_candidate(root, artifacts, source_commit=commit)
+    assert len(manifest.artifacts) == 16
+    assert manifest.candidate_commit == commit
+    output = artifacts / "release-manifest.json"
+    write_manifest(manifest, output)
+    original = output.read_bytes()
+    write_manifest(verify_candidate(root, artifacts, source_commit=commit), output)
+    assert output.read_bytes() == original
+    with pytest.raises(FileExistsError):
+        write_manifest(manifest.model_copy(update={"source_commit": "f" * 40}), output)
+    damaged = artifacts / "nanobot-tui-linux-x64.zip.sha256"
+    damaged.write_text("0" * 64 + "  nanobot-tui-linux-x64.zip\n")
+    with pytest.raises(ValueError, match="checksum mismatch"):
+        verify_candidate(root, artifacts, source_commit=commit)
