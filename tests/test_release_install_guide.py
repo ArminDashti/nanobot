@@ -26,6 +26,9 @@ def test_handoff_commands_bind_every_platform_to_its_exact_release(manifest):
     assert manifest.candidate_commit in guide
     blocks = [block.split("\n", 1)[1].strip() for block in guide.split("```")[1::2]]
     commands = [shlex.split(block) for block in blocks if block.startswith("python -I -c ")]
+    # PowerShell feeds the helper on stdin to avoid legacy native -c quoting.
+    commands += [["python", "-I", "-", None, *shlex.split(block.split("'@ | python -I - ", 1)[1])]
+                 for block in blocks if block.startswith("@'\n")]
     assert len(commands) == 5 * 3 * 2
     for platform in PLATFORMS.values():
         artifact = next(item for item in manifest.artifacts if item.filename.endswith(f"-{platform}.whl"))

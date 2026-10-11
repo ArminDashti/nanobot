@@ -70,6 +70,16 @@ def verification_command(owner: Owner, *, windows: bool) -> str:
     return f'"$({directory})/nanobot-ai/bin/python" -I -m nanobot --version'
 
 
+def render_install_command(command: list[str], *, windows: bool) -> str:
+    """Render install_command's Python helper for the target shell."""
+    if not windows:
+        return shlex.join(command)
+    # Windows PowerShell strips embedded quotes from native -c arguments. Feed
+    # the fixed ASCII helper on stdin instead; wheel identity remains in argv.
+    arguments = " ".join("'" + value.replace("'", "''") + "'" for value in command[4:])
+    return f"@'\n{command[3].rstrip()}\n'@ | python -I - {arguments}"
+
+
 def bootstrap_commands(manifest: ReleaseManifest, manifest_sha256: str) -> tuple[str, str]:
     """Pin the installer to the candidate and the download to verified manifest bytes."""
     if not re.fullmatch(r"[0-9a-f]{64}", manifest_sha256):
@@ -173,9 +183,12 @@ def render_install_guide(manifest: ReleaseManifest, *, manifest_sha256: str | No
         )
         for owner, title in owners:
             lines += [f"#### {title}", "", "New installation:", "", f"```{shell}",
-                      shlex.join(install_command(manifest, artifact, owner=owner, existing=False)),
+                      render_install_command(install_command(manifest, artifact, owner=owner, existing=False),
+                                             windows=target == "win32-x64"),
                       "```", "", "Existing base-package installation, after stopping and backing up:", "",
-                      f"```{shell}", shlex.join(install_command(manifest, artifact, owner=owner, existing=True)),
+                      f"```{shell}",
+                      render_install_command(install_command(manifest, artifact, owner=owner, existing=True),
+                                             windows=target == "win32-x64"),
                       "```", "", "Verify the version from this owner's persistent environment:", "",
                       f"```{shell}", verification_command(owner, windows=target == "win32-x64"), "```", ""]
     if manifest_sha256 is not None:

@@ -28,7 +28,12 @@ import pytest
 from packaging.tags import sys_tags
 
 from nanobot import releases
-from scripts.release_install_guide import bootstrap_commands, install_command, verification_command
+from scripts.release_install_guide import (
+    bootstrap_commands,
+    install_command,
+    render_install_command,
+    verification_command,
+)
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 WINDOWS = os.name == "nt"
@@ -250,7 +255,8 @@ def test_failed_install_does_not_fall_through_to_another_environment(sandbox, ma
     # Offline and no candidate: this runs the manager's real failed-install path.
     result = _installer(sandbox, check=False)
     assert result.returncode != 0
-    assert "no other installation was attempted" in result.stdout + result.stderr
+    # Windows PowerShell wraps native failure records to the host's text width.
+    assert "no other installation was attempted" in " ".join((result.stdout + result.stderr).split())
     assert not (sandbox["root"] / "managed").exists()
     assert "INSTALLER_PROBE" not in result.stdout
 
@@ -313,7 +319,7 @@ def _run_guide_command(sandbox, command, python, *, check=True):
     else:
         prelude = f'python() {{ {shlex.quote(str(python))} "$@"; }}\n'
         shell = ["/bin/sh", "-c"]
-    return _run([*shell, prelude + shlex.join(command)], sandbox, check=check)
+    return _run([*shell, prelude + render_install_command(command, windows=WINDOWS)], sandbox, check=check)
 
 
 @pytest.mark.parametrize("owner", ["uv", "pipx", "pip"])
