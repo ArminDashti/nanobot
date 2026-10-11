@@ -2278,6 +2278,7 @@
     }
   },
   "common": {
+    "retry": "Réessayer",
     "dismiss": "Fermer",
     "close": "Fermer",
     "current": "Actuel",

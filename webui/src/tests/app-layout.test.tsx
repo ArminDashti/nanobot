@@ -4089,6 +4089,56 @@ describe("App layout", () => {
     expect(within(popup).getByText("2 pending")).toBeVisible();
   });
 
+  it("shows a recovered pairing reply even after its failure notice was dismissed", async () => {
+    vi.useFakeTimers();
+    let delivery_status = "failed";
+    mockFetchRoutes({ "/api/settings/pairing": () => ({ requests: [{
+      code: "ABCD-EFGH", channel: "feishu", sender_id: "alice", delivery_status,
+    }] }) });
+    render(<App />);
+    await act(async () => {});
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Pair account" }))
+      .getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog", { name: "Pair account" })).not.toBeInTheDocument();
+    await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+    expect(screen.queryByRole("dialog", { name: "Pair account" })).not.toBeInTheDocument();
+
+    delivery_status = "sent";
+    await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+    const popup = screen.getByRole("dialog", { name: "Pair account" });
+    expect(within(popup).getByRole("textbox", { name: "Pairing code" })).toBeEnabled();
+    expect(within(popup).queryByRole("alert")).not.toBeInTheDocument();
+    expect(requestMutationSpy).not.toHaveBeenCalled();
+  });
+
+  it("keeps a failed pairing approval idle until the user retries", async () => {
+    vi.useFakeTimers();
+    let requests = [{ code: "ABCD-EFGH", channel: "feishu", sender_id: "alice", delivery_status: "sent" }];
+    mockFetchRoutes({ "/api/settings/pairing": () => ({ requests }) });
+    requestMutationSpy
+      .mockRejectedValueOnce(new Error("Approval unavailable"))
+      // Bound the old automatic retry loop while reproducing it.
+      .mockImplementation(() => new Promise(() => {}));
+    render(<App />);
+    await act(async () => {});
+    const popup = screen.getByRole("dialog", { name: "Pair account" });
+    fireEvent.change(within(popup).getByRole("textbox", { name: "Pairing code" }), {
+      target: { value: "ABCD-EFGH" },
+    });
+    await act(async () => {});
+    await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+    expect(requestMutationSpy).toHaveBeenCalledTimes(1);
+    expect(within(popup).getByText("Approval unavailable")).toBeVisible();
+    expect(within(popup).getByRole("textbox", { name: "Pairing code" })).toBeEnabled();
+
+    requests = [];
+    requestMutationSpy.mockResolvedValueOnce({ requests });
+    fireEvent.click(within(popup).getByRole("button", { name: "Retry" }));
+    await act(async () => {});
+    expect(requestMutationSpy).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("dialog", { name: "Pair account" })).not.toBeInTheDocument();
+  });
+
   it("reuses an in-flight pairing poll when the page becomes visible again", async () => {
     let resolvePairing!: (response: Response) => void;
     const pendingPairing = new Promise<Response>((resolve) => {

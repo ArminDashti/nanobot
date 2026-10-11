@@ -2478,6 +2478,7 @@
     }
   },
   "common": {
+    "retry": "Retry",
     "dismiss": "Dismiss",
     "close": "Close",
     "current": "Current",

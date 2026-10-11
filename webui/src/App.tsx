@@ -617,10 +617,11 @@ function PairingCodePopup({
   busyCode: string | null;
   error: string | null;
   onApprove: (code: string) => void;
-  onDismiss: (code: string) => void;
+  onDismiss: (request: PairingRequestInfo) => void;
 }) {
   const { t } = useTranslation();
   const [value, setValue] = useState("");
+  const attemptedCode = useRef<string | null>(null);
   const normalizedCode = normalizePairingCode(value);
   const matchedRequest = useMemo(
     () => requests.find((request) => request.code === normalizedCode) ?? null,
@@ -638,12 +639,16 @@ function PairingCodePopup({
   const showNoMatch = isCompleteCode && !matchedRequest && !busyCode;
 
   useEffect(() => {
-    if (!matchedRequest || busyCode) return;
+    if (!matchedRequest || busyCode || attemptedCode.current === matchedRequest.code) return;
+    attemptedCode.current = matchedRequest.code;
     onApprove(matchedRequest.code);
   }, [busyCode, matchedRequest, onApprove]);
 
   useEffect(() => {
-    if (!requests.length) setValue("");
+    if (!requests.length) {
+      setValue("");
+      attemptedCode.current = null;
+    }
   }, [requests.length]);
 
   if (!firstRequest) return null;
@@ -655,7 +660,10 @@ function PairingCodePopup({
       matched={Boolean(matchedRequest)}
       invalid={showNoMatch}
       ariaLabel={t("app.pairing.code", { defaultValue: "Pairing code" })}
-      onChange={(next) => setValue(formatPairingCodeInput(next))}
+      onChange={(next) => {
+        attemptedCode.current = null;
+        setValue(formatPairingCodeInput(next));
+      }}
     />
   );
 
@@ -696,7 +704,7 @@ function PairingCodePopup({
             <button
               type="button"
               aria-label={t("common.close", { defaultValue: "Close" })}
-              onClick={() => onDismiss(displayRequest.code)}
+              onClick={() => onDismiss(displayRequest)}
               className="rounded-full p-1 text-muted-foreground transition hover:bg-muted hover:text-foreground"
             >
               <X className="h-4 w-4" aria-hidden />
@@ -722,7 +730,7 @@ function PairingCodePopup({
           {!deliveryBlocked || total > 1 ? (
             <div className="mt-3 flex items-center justify-between gap-3 text-[12.5px] text-muted-foreground">
               <span>
-                {matchedRequest
+                {matchedRequest && busyCode === matchedRequest.code
                   ? t("app.pairing.matched", {
                       defaultValue: "Matched {{channel}}. Connecting...",
                       channel: channelLabel(matchedRequest.channel),
@@ -752,7 +760,19 @@ function PairingCodePopup({
           ) : null}
 
           {error ? (
-            <p className="mt-2 text-[12px] leading-5 text-destructive">{error}</p>
+            <div className="mt-2 space-y-2">
+              <p role="alert" className="text-[12px] leading-5 text-destructive">{error}</p>
+              {matchedRequest ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={Boolean(busyCode)}
+                  onClick={() => onApprove(matchedRequest.code)}
+                >
+                  {t("common.retry", { defaultValue: "Retry" })}
+                </Button>
+              ) : null}
+            </div>
           ) : null}
         </div>
       </div>
@@ -1256,7 +1276,10 @@ function Shell({
   const [pairingBusyCode, setPairingBusyCode] = useState<string | null>(null);
   const [pairingError, setPairingError] = useState<string | null>(null);
   const pairingRefreshRef = useRef<Promise<number> | null>(null);
-  const [snoozedPairingCodes, setSnoozedPairingCodes] = useState<Map<string, number>>(
+  const [snoozedPairingCodes, setSnoozedPairingCodes] = useState<Map<string, {
+    until: number;
+    deliveryStatus: PairingRequestInfo["delivery_status"];
+  }>>(
     () => new Map(),
   );
   const [runningChatIds, setRunningChatIds] = useState<Set<string>>(() => new Set());
@@ -1451,11 +1474,13 @@ function Shell({
         setPairingRequests(requests);
         setSnoozedPairingCodes((current) => {
           if (current.size === 0) return current;
-          const activeCodes = new Set(requests.map((request) => request.code));
+          const activeRequests = new Map(requests.map((request) => [request.code, request]));
           const now = Date.now();
           const next = new Map(
             Array.from(current).filter(
-              ([code, snoozedUntil]) => activeCodes.has(code) && snoozedUntil > now,
+              ([code, snooze]) => activeRequests.has(code)
+                && snooze.until > now
+                && activeRequests.get(code)?.delivery_status === snooze.deliveryStatus,
             ),
           );
           return next.size === current.size ? current : next;
@@ -2456,8 +2481,8 @@ function Shell({
     () => {
       const now = Date.now();
       return pairingRequests.filter((request) => {
-        const snoozedUntil = snoozedPairingCodes.get(request.code);
-        return !snoozedUntil || snoozedUntil <= now;
+        const snooze = snoozedPairingCodes.get(request.code);
+        return !snooze || snooze.until <= now;
       });
     },
     [pairingRequests, snoozedPairingCodes],
@@ -2486,12 +2511,13 @@ function Shell({
     [client, refreshPairingRequests],
   );
 
-  const onDismissPairingRequest = useCallback((code: string) => {
+  const onDismissPairingRequest = useCallback((request: PairingRequestInfo) => {
     setSnoozedPairingCodes((current) => {
-      const snoozedUntil = Date.now() + PAIRING_DISMISS_SNOOZE_MS;
-      if (current.get(code) === snoozedUntil) return current;
       const next = new Map(current);
-      next.set(code, snoozedUntil);
+      next.set(request.code, {
+        until: Date.now() + PAIRING_DISMISS_SNOOZE_MS,
+        deliveryStatus: request.delivery_status,
+      });
       return next;
     });
   }, []);

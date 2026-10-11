@@ -2278,6 +2278,7 @@
     }
   },
   "common": {
+    "retry": "다시 시도",
     "dismiss": "닫기",
     "close": "닫기",
     "current": "현재",

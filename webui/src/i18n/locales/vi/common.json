@@ -2278,6 +2278,7 @@
     }
   },
   "common": {
+    "retry": "Thử lại",
     "dismiss": "Đóng",
     "close": "Đóng",
     "current": "Hiện tại",

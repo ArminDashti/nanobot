@@ -2278,6 +2278,7 @@
     }
   },
   "common": {
+    "retry": "重試",
     "dismiss": "關閉",
     "close": "關閉",
     "current": "目前",

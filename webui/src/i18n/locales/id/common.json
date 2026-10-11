@@ -2278,6 +2278,7 @@
     }
   },
   "common": {
+    "retry": "Coba lagi",
     "dismiss": "Tutup",
     "close": "Tutup",
     "current": "Saat ini",

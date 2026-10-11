@@ -2278,6 +2278,7 @@
     }
   },
   "common": {
+    "retry": "再試行",
     "dismiss": "閉じる",
     "close": "閉じる",
     "current": "現在",

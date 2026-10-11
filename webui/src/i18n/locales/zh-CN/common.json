@@ -2478,6 +2478,7 @@
     }
   },
   "common": {
+    "retry": "重试",
     "dismiss": "关闭",
     "close": "关闭",
     "current": "当前",
