@@ -134,8 +134,23 @@ of extras, and suffixed/custom installations require their own manager instructi
 available Preview channel. It has read-only repository permission and never creates
 tags/releases, uploads to PyPI, or advances a release catalogue. It builds and structurally
 checks all five platform wheels, the source distribution and licensed fallback archives.
-It retains only the small identity/manifest reports for three days, not installable
-binaries. Cross-compilation is not native execution or release approval.
+By default it retains only the small identity/manifest reports for three days, not
+installable binaries. Cross-compilation is not native execution or release approval.
+
+For one candidate intended for maintainer acceptance, explicitly select
+`retain_installable`. This preserves the same checked wheels, sdist, native archives,
+manifest, installation guide and a self-contained shallow Git repository for **one day**. It does
+not rebuild, publish, update a channel or claim release approval. That repository contains
+the candidate and its source parent, not unrelated history, checkout configuration or
+untracked files. The final `handoff.json` records identity only after the copied
+artifacts pass verification. An interrupted retention is not an accepted handoff.
+
+This opt-in is a bounded exception to the contribution guideline against large CI
+artifacts: approximately 400 MB per retained candidate. Keep it
+off for routine preflight and schedules; assess storage before using it. Download and
+preserve an approved handoff before the one-day expiry. Do not rebuild expired files
+and reuse their old verification report. This workflow change requires that resource
+exception to be called out explicitly in the PR before merge.
 
 After assembly, the workflow installs the Linux x64 wheel and its binary dependencies
 in a separate venv with no Bun/Node/Git on the install PATH. It then uses that venv's
@@ -241,3 +256,18 @@ and must not be uploaded. Native launch, clean installation, upgrade/recovery, s
 commitment and the final publication procedure remain required gates. Existing TUI
 publication now refuses to overwrite assets; recover missing uploads from the original
 verified files instead of rebuilding and replacing a public release.
+
+To retain the exact local handoff outside a temporary build checkout:
+
+```bash
+python -m scripts.release_candidate retain --source-commit <original-source-sha> \
+  --artifacts <verified-artifact-directory> --output <new-retained-directory>
+```
+
+The `artifacts/` subdirectory is the only release upload set. `source.git/`,
+`install.md` and `handoff.json` are maintenance handoff files, not additional PyPI
+packages. Restore the source with `git clone --no-local <retained>/source.git <new-checkout>`
+and check its HEAD against `handoff.json`. Re-run `release_candidate verify` against
+the retained `artifacts/` before the separately approved publication. Keep native
+test reports and release notes with the handoff; retention itself adds no native,
+migration, interactive UI or public-download acceptance evidence.

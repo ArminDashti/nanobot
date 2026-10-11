@@ -8,6 +8,11 @@ on:
         description: Next stable base (for example 0.3.6); must not have a stable tag
         required: true
         type: string
+      retain_installable:
+        description: Retain this exact installable candidate and source for 1 day (~400 MB); not publication
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -150,3 +155,23 @@ jobs:
             ${{ runner.temp }}/install-candidate.md
           if-no-files-found: error
           retention-days: 3
+
+      # Explicit, short-lived release handoff only. This is the documented
+      # exception to report-only preflight; never enable it on a daily schedule.
+      - name: Preserve the verified bytes and independent candidate source
+        if: ${{ inputs.retain_installable }}
+        working-directory: ${{ env.CANDIDATE_DIR }}
+        run: |
+          python -m scripts.release_candidate retain --source-commit "$SOURCE_COMMIT" \
+            --artifacts "$RUNNER_TEMP/release-artifacts" \
+            --output "$RUNNER_TEMP/retained-candidate"
+
+      - name: Retain installable candidate for approved release handoff
+        if: ${{ inputs.retain_installable }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: installable-candidate-${{ github.run_number }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/retained-candidate
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1

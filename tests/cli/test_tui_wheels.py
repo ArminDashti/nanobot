@@ -18,7 +18,13 @@ import pytest
 
 from nanobot.cli import tui_launcher
 from scripts import build_tui_wheels as packager
-from scripts.release_candidate import verify_candidate, write_install_guide, write_manifest
+from scripts import release_candidate
+from scripts.release_candidate import (
+    retain_candidate,
+    verify_candidate,
+    write_install_guide,
+    write_manifest,
+)
 
 
 @pytest.fixture
@@ -279,6 +285,45 @@ def test_complete_manifest_binds_wheels_sdist_and_fallback_archives(tmp_path, co
     with pytest.raises(ValueError, match="checksum mismatch"):
         write_install_guide(root, artifacts, tmp_path / "damaged.md", source_commit=commit)
     assert not (tmp_path / "damaged.md").exists()
+
+
+def test_retained_candidate_keeps_checked_bytes_and_independent_source(tmp_path, complete_candidate):
+    root, commit, artifacts = complete_candidate
+    manifest = verify_candidate(root, artifacts, source_commit=commit)
+    write_manifest(manifest, artifacts / "release-manifest.json")
+    (root / "private-untracked.txt").write_text("not release input")
+    output = tmp_path / "retained"
+    retain_candidate(root, artifacts, output, source_commit=commit)
+    identity = json.loads((output / "handoff.json").read_text())
+    assert identity["candidate_commit"] == commit and identity["published"] is False
+    assert identity["manifest_sha256"] == hashlib.sha256((artifacts / "release-manifest.json").read_bytes()).hexdigest()
+    assert verify_candidate(root, output / "artifacts", source_commit=commit) == manifest
+    for original in artifacts.iterdir():
+        assert (output / "artifacts" / original.name).read_bytes() == original.read_bytes()
+    independent = tmp_path / "independent"
+    subprocess.run(["git", "clone", "--no-local", str(output / "source.git"), str(independent)],
+                   check=True, capture_output=True)
+    assert subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=independent, text=True).strip() == commit
+    assert not (independent / "private-untracked.txt").exists()
+    assert not (output / "source.git/objects/info/alternates").exists()
+    assert str(root) not in (output / "source.git/config").read_text()
+    assert verify_candidate(independent, output / "artifacts", source_commit=commit) == manifest
+    with pytest.raises(FileExistsError):
+        retain_candidate(root, artifacts, output, source_commit=commit)
+
+
+def test_interrupted_retention_has_no_accepted_handoff(tmp_path, complete_candidate, monkeypatch):
+    root, commit, artifacts = complete_candidate
+    write_manifest(verify_candidate(root, artifacts, source_commit=commit), artifacts / "release-manifest.json")
+
+    def interrupted_copy(source, target):
+        raise OSError("controlled interrupted copy")
+
+    monkeypatch.setattr(release_candidate.shutil, "copyfile", interrupted_copy)
+    output = tmp_path / "interrupted"
+    with pytest.raises(OSError, match="interrupted copy"):
+        retain_candidate(root, artifacts, output, source_commit=commit)
+    assert not (output / "handoff.json").exists()
 
 
 @pytest.mark.parametrize("mutation", ["wheel-code", "wheel-webui", "source-code", "source-missing", "source-extra"])

@@ -261,6 +261,50 @@ def assemble_candidate(root: Path, output: Path, *, wheel: Path, sdist: Path,
     return manifest
 
 
+def retain_candidate(root: Path, artifacts: Path, output: Path, *, source_commit: str) -> None:
+    """Preserve checked bytes and their source, without publishing or rebuilding.
+
+    A successful handoff has a final handoff.json. Partial copies are not accepted
+    release inputs. The self-contained shallow repository preserves the candidate
+    and its source parent, not unrelated history, untracked files or credentials.
+    """
+    root, artifacts, output = root.resolve(), artifacts.resolve(), output.resolve()
+    if output.is_relative_to(root) or output.is_relative_to(artifacts):
+        raise ValueError("Retained handoff must be outside the checkout and artifact directory")
+    recorded = (artifacts / "release-manifest.json").read_bytes()
+    manifest = verify_candidate(root, artifacts, source_commit=source_commit)
+    if ReleaseManifest.model_validate_json(recorded) != manifest:
+        raise ValueError("Candidate differs from its recorded release manifest")
+    output.mkdir(parents=True, exist_ok=False)
+    retained = output / "artifacts"
+    retained.mkdir()
+    for name in sorted(release_filenames(manifest.version) | {"release-manifest.json"}):
+        shutil.copyfile(artifacts / name, retained / name)
+    # Check the actual copies, not a report for the source directory. A future
+    # publisher must consume these bytes and verify this manifest again.
+    if ((retained / "release-manifest.json").read_bytes() != recorded
+            or verify_candidate(root, retained, source_commit=source_commit) != manifest):
+        raise ValueError("Retained artifacts differ from the reviewed candidate")
+    source = output / "source.git"
+    with tempfile.TemporaryDirectory(prefix=".candidate-template-", dir=output) as template:
+        # File transport copies real objects rather than borrowing alternates.
+        # Two commits retain the exact version-only candidate relationship.
+        _git(root, "-c", f"init.templateDir={template}", "clone", "--bare", "--depth", "2",
+             "--single-branch", "--no-tags", root.as_uri(), str(source))
+    (source / "config").write_text("[core]\nrepositoryformatversion = 0\nbare = true\n", encoding="utf-8")
+    _git(source, "fsck", "--full")
+    if _git(source, "rev-parse", "HEAD") != manifest.candidate_commit:
+        raise ValueError("Retained source differs from the candidate")
+    write_install_guide(root, retained, output / "install.md", source_commit=source_commit)
+    _write_candidate_text(json.dumps({
+        "version": manifest.version, "source_commit": source_commit,
+        "candidate_commit": manifest.candidate_commit,
+        "manifest_sha256": hashlib.sha256(recorded).hexdigest(),
+        "source_depth": 2,
+        "published": False,
+    }, indent=2) + "\n", output / "handoff.json")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=ROOT)
@@ -277,6 +321,10 @@ def main() -> None:
     instructions.add_argument("--source-commit", required=True)
     instructions.add_argument("--artifacts", type=Path, required=True)
     instructions.add_argument("--output", type=Path, required=True)
+    retain = commands.add_parser("retain")
+    retain.add_argument("--source-commit", required=True)
+    retain.add_argument("--artifacts", type=Path, required=True)
+    retain.add_argument("--output", type=Path, required=True)
     assemble = commands.add_parser("assemble")
     assemble.add_argument("--source-commit", required=True)
     assemble.add_argument("--wheel", type=Path, required=True)
@@ -294,6 +342,9 @@ def main() -> None:
     elif args.command == "instructions":
         write_install_guide(args.root, args.artifacts, args.output, source_commit=args.source_commit)
         print(f"Candidate install handoff: {args.output}")
+    elif args.command == "retain":
+        retain_candidate(args.root, args.artifacts, args.output, source_commit=args.source_commit)
+        print(f"Retained exact candidate (not published): {args.output}")
     else:
         manifest = assemble_candidate(args.root, args.output, wheel=args.wheel, sdist=args.sdist,
                                       tui_dir=args.tui_dir, source_commit=args.source_commit)
