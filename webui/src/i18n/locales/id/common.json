@@ -339,6 +339,9 @@
       "description": "UI web nanobot — ngobrol dengan ruang kerja nanobot Anda."
     },
     "pairing": {
+      "haveCode": "Sudah menerima kode?",
+      "deliveryFailed": "Kode tidak dapat dikirim. Periksa izin pengiriman pesan bot dan log gateway, lalu kirim pesan pribadi lagi untuk mencoba ulang.",
+      "deliverySending": "Mengirim kode ke obrolan Anda. Jika belum diterima, kirim pesan pribadi lagi ke bot untuk mencoba ulang.",
       "title": "Pasangkan akun",
       "description": "Masukkan kode pemasangan yang diterima di chat.",
       "code": "Kode pairing",

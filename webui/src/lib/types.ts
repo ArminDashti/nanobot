@@ -1197,6 +1197,7 @@ export interface PairingRequestInfo {
   created_at_ms?: number | null;
   expires_at_ms?: number | null;
   expires_in_seconds?: number | null;
+  delivery_status?: "sending" | "sent" | "failed";
 }
 
 export interface PairingPayload {

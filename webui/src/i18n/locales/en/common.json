@@ -339,6 +339,9 @@
       "description": "nanobot web UI — chat with your nanobot workspace."
     },
     "pairing": {
+      "haveCode": "Already received a code?",
+      "deliveryFailed": "Couldn't send the pairing code. Check this bot's send-message permissions and gateway logs, then send it another private message to retry.",
+      "deliverySending": "Sending a pairing code to your chat. If it doesn't arrive, send the bot another private message to retry.",
       "title": "Pair account",
       "description": "Enter the pairing code received in chat.",
       "code": "Pairing code",

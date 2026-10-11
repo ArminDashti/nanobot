@@ -4063,6 +4063,32 @@ describe("App layout", () => {
     unmount();
   });
 
+  it.each(["sending", "failed"])("explains an undelivered pairing reply (%s) without empty code slots", async (delivery_status) => {
+    mockFetchRoutes({ "/api/settings/pairing": { requests: [{
+      code: "ABCD-EFGH", channel: "feishu", sender_id: "alice", delivery_status,
+    }] } });
+    render(<App />);
+    const popup = await screen.findByRole("dialog", { name: "Pair account" });
+    expect(within(popup).getByText("Already received a code?").closest("details")).not.toHaveAttribute("open");
+    expect(within(popup).getByText(/another private message to retry/)).toBeVisible();
+    if (delivery_status === "failed") expect(within(popup).getByRole("alert")).toBeVisible();
+    fireEvent.click(within(popup).getByText("Already received a code?"));
+    expect(within(popup).getByRole("textbox", { name: "Pairing code" })).toBeEnabled();
+    expect(requestMutationSpy).not.toHaveBeenCalledWith("settings.pairing.approve", expect.anything(), expect.anything());
+  });
+
+  it.each([undefined, "sent"])("keeps legacy/delivered pairing usable behind a failed request (%s)", async (delivery_status) => {
+    mockFetchRoutes({ "/api/settings/pairing": { requests: [
+      { code: "ABCD-EFGH", channel: "feishu", sender_id: "alice", delivery_status: "failed" },
+      { code: "IJKL-MNOP", channel: "feishu.second", sender_id: "bob", delivery_status },
+    ] } });
+    render(<App />);
+    const popup = await screen.findByRole("dialog", { name: "Pair account" });
+    expect(within(popup).getByRole("textbox", { name: "Pairing code" })).toBeEnabled();
+    expect(within(popup).queryByRole("alert")).not.toBeInTheDocument();
+    expect(within(popup).getByText("2 pending")).toBeVisible();
+  });
+
   it("reuses an in-flight pairing poll when the page becomes visible again", async () => {
     let resolvePairing!: (response: Response) => void;
     const pendingPairing = new Promise<Response>((resolve) => {

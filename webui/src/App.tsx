@@ -626,9 +626,14 @@ function PairingCodePopup({
     () => requests.find((request) => request.code === normalizedCode) ?? null,
     [normalizedCode, requests],
   );
-  const firstRequest = requests[0] ?? null;
+  // Keep delivered and legacy requests usable even when another bot cannot reply.
+  const firstRequest = requests.find((request) => (
+    !request.delivery_status || request.delivery_status === "sent"
+  )) ?? requests[0] ?? null;
   const displayRequest = matchedRequest ?? firstRequest;
-  const expires = formatPairingExpiry(firstRequest?.expires_in_seconds);
+  const deliveryBlocked = displayRequest?.delivery_status === "failed"
+    || displayRequest?.delivery_status === "sending";
+  const expires = formatPairingExpiry(displayRequest?.expires_in_seconds);
   const isCompleteCode = normalizedCode.length === 9;
   const showNoMatch = isCompleteCode && !matchedRequest && !busyCode;
 
@@ -642,6 +647,17 @@ function PairingCodePopup({
   }, [requests.length]);
 
   if (!firstRequest) return null;
+
+  const codeInput = (
+    <PairingCodeSlots
+      value={value}
+      disabled={Boolean(busyCode)}
+      matched={Boolean(matchedRequest)}
+      invalid={showNoMatch}
+      ariaLabel={t("app.pairing.code", { defaultValue: "Pairing code" })}
+      onChange={(next) => setValue(formatPairingCodeInput(next))}
+    />
+  );
 
   return (
     <div
@@ -664,8 +680,15 @@ function PairingCodePopup({
               <p className="text-[15px] font-semibold tracking-[-0.01em]">
                 {t("app.pairing.title", { defaultValue: "Pair a chat user" })}
               </p>
-              <p className="mt-1 text-[13px] leading-5 text-muted-foreground">
-                {t("app.pairing.description", {
+              <p
+                className="mt-1 text-pretty text-[13px] leading-5 text-muted-foreground"
+                role={displayRequest.delivery_status === "failed" ? "alert" : undefined}
+              >
+                {displayRequest.delivery_status === "failed" ? t("app.pairing.deliveryFailed", {
+                  defaultValue: "Couldn't send the pairing code. Check this bot's send-message permissions and gateway logs, then send it another private message to retry.",
+                }) : displayRequest.delivery_status === "sending" ? t("app.pairing.deliverySending", {
+                  defaultValue: "Sending a pairing code to your chat. If it doesn't arrive, send the bot another private message to retry.",
+                }) : t("app.pairing.description", {
                   defaultValue: "Enter the pairing code shown in the chat.",
                 })}
               </p>
@@ -673,46 +696,52 @@ function PairingCodePopup({
             <button
               type="button"
               aria-label={t("common.close", { defaultValue: "Close" })}
-              onClick={() => onDismiss(firstRequest.code)}
+              onClick={() => onDismiss(displayRequest.code)}
               className="rounded-full p-1 text-muted-foreground transition hover:bg-muted hover:text-foreground"
             >
               <X className="h-4 w-4" aria-hidden />
             </button>
           </div>
 
-          <label className="mt-4 block text-[12.5px] font-medium text-foreground">
-            {t("app.pairing.code", { defaultValue: "Pairing code" })}
-          </label>
-          <PairingCodeSlots
-            value={value}
-            disabled={Boolean(busyCode)}
-            matched={Boolean(matchedRequest)}
-            invalid={showNoMatch}
-            ariaLabel={t("app.pairing.code", { defaultValue: "Pairing code" })}
-            onChange={(next) => setValue(formatPairingCodeInput(next))}
-          />
+          {deliveryBlocked ? (
+            <details className="mt-3 text-[12.5px] text-muted-foreground">
+              <summary className="cursor-pointer">
+                {t("app.pairing.haveCode", { defaultValue: "Already received a code?" })}
+              </summary>
+              {codeInput}
+            </details>
+          ) : (
+            <>
+              <label className="mt-4 block text-[12.5px] font-medium text-foreground">
+                {t("app.pairing.code", { defaultValue: "Pairing code" })}
+              </label>
+              {codeInput}
+            </>
+          )}
 
-          <div className="mt-3 flex items-center justify-between gap-3 text-[12.5px] text-muted-foreground">
-            <span>
-              {matchedRequest
-                ? t("app.pairing.matched", {
-                    defaultValue: "Matched {{channel}}. Connecting...",
-                    channel: channelLabel(matchedRequest.channel),
-                  })
-                : t("app.pairing.expiresInline", {
-                    defaultValue: "Code expires {{expires}}.",
-                    expires,
-                  })}
-            </span>
-            {total > 1 ? (
-              <span className="shrink-0">
-                {t("app.pairing.queueCount", {
-                  defaultValue: "{{count}} pending",
-                  count: total,
-                })}
+          {!deliveryBlocked || total > 1 ? (
+            <div className="mt-3 flex items-center justify-between gap-3 text-[12.5px] text-muted-foreground">
+              <span>
+                {matchedRequest
+                  ? t("app.pairing.matched", {
+                      defaultValue: "Matched {{channel}}. Connecting...",
+                      channel: channelLabel(matchedRequest.channel),
+                    })
+                  : deliveryBlocked ? null : t("app.pairing.expiresInline", {
+                      defaultValue: "Code expires {{expires}}.",
+                      expires,
+                    })}
               </span>
-            ) : null}
-          </div>
+              {total > 1 ? (
+                <span className="shrink-0">
+                  {t("app.pairing.queueCount", {
+                    defaultValue: "{{count}} pending",
+                    count: total,
+                  })}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
 
           {showNoMatch ? (
             <p className="mt-2 text-[12px] leading-5 text-destructive">

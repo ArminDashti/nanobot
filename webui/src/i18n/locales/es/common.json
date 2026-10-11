@@ -339,6 +339,9 @@
       "description": "Interfaz web de nanobot: conversa con tu espacio de trabajo de nanobot."
     },
     "pairing": {
+      "haveCode": "¿Ya recibiste un código?",
+      "deliveryFailed": "No se pudo enviar el código. Revisa los permisos de envío del bot y los registros de la pasarela. Después, envíale otro mensaje privado para reintentar.",
+      "deliverySending": "Enviando el código al chat. Si no llega, envía otro mensaje privado al bot para reintentar.",
       "title": "Vincular cuenta",
       "description": "Introduce el código de vinculación recibido en el chat.",
       "code": "Código de vinculación",

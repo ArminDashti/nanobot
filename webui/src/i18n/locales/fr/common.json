@@ -339,6 +339,9 @@
       "description": "Interface web nanobot — discutez avec votre espace de travail nanobot."
     },
     "pairing": {
+      "haveCode": "Vous avez déjà reçu un code ?",
+      "deliveryFailed": "Impossible d’envoyer le code. Vérifiez les autorisations d’envoi du bot et les journaux de la passerelle, puis envoyez-lui un autre message privé pour réessayer.",
+      "deliverySending": "Envoi du code dans votre conversation. Si vous ne le recevez pas, envoyez un autre message privé au bot pour réessayer.",
       "title": "Associer un compte",
       "description": "Saisissez le code d’association reçu dans la discussion.",
       "code": "Code d’association",

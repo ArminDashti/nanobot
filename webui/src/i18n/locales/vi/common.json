@@ -339,6 +339,9 @@
       "description": "Giao diện web nanobot — trò chuyện với không gian làm việc nanobot của bạn."
     },
     "pairing": {
+      "haveCode": "Bạn đã nhận được mã?",
+      "deliveryFailed": "Không thể gửi mã ghép nối. Hãy kiểm tra quyền gửi tin nhắn của bot và nhật ký gateway, rồi gửi thêm một tin nhắn riêng để thử lại.",
+      "deliverySending": "Đang gửi mã ghép nối đến cuộc trò chuyện. Nếu chưa nhận được, hãy gửi thêm một tin nhắn riêng cho bot để thử lại.",
       "title": "Ghép tài khoản",
       "description": "Nhập mã ghép nhận được trong cuộc trò chuyện.",
       "code": "Mã liên kết",

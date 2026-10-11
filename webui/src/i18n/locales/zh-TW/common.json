@@ -339,6 +339,9 @@
       "description": "nanobot Web UI —— 與你的 nanobot 工作區對話。"
     },
     "pairing": {
+      "haveCode": "已收到配對碼？",
+      "deliveryFailed": "配對碼傳送失敗。請檢查此機器人的訊息傳送權限和閘道日誌，再傳一則私訊給它以重試。",
+      "deliverySending": "正在向聊天傳送配對碼。如果沒有收到，請再傳一則私訊給機器人以重試。",
       "title": "賬號配對",
       "description": "輸入聊天平臺收到的配對碼",
       "code": "配對碼",
