@@ -21,7 +21,10 @@ import zipfile
 from email.parser import BytesParser
 from pathlib import Path, PurePosixPath
 
-from nanobot.cli.tui_launcher import _verified_release_archive
+# Packaging must use the same archive checks as the installed launcher.
+from nanobot.cli.tui_launcher import (
+    _verified_release_archive,  # pyright: ignore[reportPrivateUsage]
+)
 from nanobot.releases import PLATFORMS
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,7 +36,7 @@ def _digest(data: bytes) -> str:
 
 def source_files(raw: bytes) -> dict[str, bytes]:
     """Compare archive contents without extracting any untrusted path to disk."""
-    files = {}
+    files: dict[str, bytes] = {}
     with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as archive:
         for member in archive:
             if member.isdir():
