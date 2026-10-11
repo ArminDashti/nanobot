@@ -162,7 +162,7 @@ jobs:
             coverage: false
             # Real PowerShell/process-tree tests run serially in a separate
             # job. Keep them out of xdist so workers never share a console.
-            pytest_args: "-n auto --dist loadfile --ignore=tests/cli/test_commands.py --ignore=tests/tools/test_exec_platform.py"
+            pytest_args: "-n auto --dist loadfile --ignore=tests/cli/test_commands.py --ignore=tests/tools/test_exec_platform.py --ignore=tests/test_install_scripts.py"
 
     steps:
       - uses: actions/checkout@v4
@@ -196,6 +196,13 @@ jobs:
         run: |
           uv tool install pipx==1.17.12
           uv tool dir --bin >> "$GITHUB_PATH"
+
+      # Keep native installer failures visible before the broad suite. With
+      # loadfile scheduling, this subprocess-heavy file occupies one worker and
+      # a later timeout can discard every buffered failure traceback.
+      - name: Run Windows installer checks
+        if: runner.os == 'Windows'
+        run: uv run --no-sync python -m pytest tests/test_install_scripts.py -x -vv --durations=10
 
       # Channel requirements live in manifests rather than uv.lock. Avoid a
       # later uv run sync pruning the packages installed by the previous step.
