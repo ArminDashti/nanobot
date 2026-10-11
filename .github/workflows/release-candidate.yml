@@ -26,12 +26,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      CANDIDATE_DIR: ${{ runner.temp }}/candidate
       SOURCE_COMMIT: ${{ github.sha }}
       NEXT_STABLE: ${{ inputs.next_stable }}
       PREVIEW_SEQUENCE: ${{ github.run_number }}
 
     steps:
+      - name: Set candidate directory
+        run: echo "CANDIDATE_DIR=$RUNNER_TEMP/candidate" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
