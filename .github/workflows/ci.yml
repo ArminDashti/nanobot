@@ -197,12 +197,12 @@ jobs:
           uv tool install pipx==1.17.12
           uv tool dir --bin >> "$GITHUB_PATH"
 
-      # Keep native installer failures visible before the broad suite. With
-      # loadfile scheduling, this subprocess-heavy file occupies one worker and
-      # a later timeout can discard every buffered failure traceback.
+      # Each case owns an isolated manager/config root, so distribute individual
+      # cases instead of putting this subprocess-heavy file on one worker. Keep
+      # failures visible before a later broad-suite timeout can hide tracebacks.
       - name: Run Windows installer checks
         if: runner.os == 'Windows'
-        run: uv run --no-sync python -m pytest tests/test_install_scripts.py -x -vv --durations=10
+        run: uv run --no-sync python -m pytest tests/test_install_scripts.py -n 4 --dist load -x -vv --durations=10
 
       # Channel requirements live in manifests rather than uv.lock. Avoid a
       # later uv run sync pruning the packages installed by the previous step.

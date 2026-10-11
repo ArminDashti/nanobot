@@ -184,7 +184,7 @@ def test_rerunning_installer_preserves_uv_version_constraint(sandbox):
     _run([uv, "tool", "install", "--python", BASE_PYTHON, "nanobot-ai==0.0.1"], sandbox)
     assert _identity(_installer(sandbox))["version"] == "0.0.1"
     receipt = sandbox["root"] / "uv-tools/nanobot-ai/uv-receipt.toml"
-    assert "==0.0.1" in receipt.read_text()
+    assert "==0.0.1" in receipt.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("original", ["pipx", "managed"])
@@ -362,11 +362,11 @@ def test_exact_pipx_target_preserves_injected_package_and_records_new_spec(sandb
     _wheel(sandbox["wheels"], "1.0.0", package="fixture-helper")
     _run([pipx, "inject", "--skip-maintenance", "nanobot-ai", "fixture-helper"], sandbox)
     receipt = prefix / "pipx_metadata.json"
-    before = json.loads(receipt.read_text())
+    before = json.loads(receipt.read_text(encoding="utf-8"))
     manifest, artifact = _preview_manifest(sandbox)
     command = install_command(manifest, artifact, owner="pipx", existing=True)
     _run_guide_command(sandbox, command, BASE_PYTHON)
-    after = json.loads(receipt.read_text())
+    after = json.loads(receipt.read_text(encoding="utf-8"))
     assert after["injected_packages"] == before["injected_packages"]
     assert after["source_interpreter"] == before["source_interpreter"]
     assert after["main_package"]["package_or_url"] == f"nanobot-ai @ {(sandbox['cwd'] / artifact.filename).as_uri()}"
@@ -436,7 +436,7 @@ def test_public_installer_pipx_preview_preserves_requested_extras(sandbox):
     _run([pipx, "install", "--skip-maintenance", "nanobot-ai[feature]"], sandbox)
     _, artifact = _preview_manifest(sandbox, extras=("feature",))
     _installer(sandbox, *_wheel_arguments(sandbox, artifact))
-    record = json.loads((prefix / "pipx_metadata.json").read_text())
+    record = json.loads((prefix / "pipx_metadata.json").read_text(encoding="utf-8"))
     assert record["main_package"]["package_or_url"].startswith("nanobot-ai[feature] @ ")
 
 
@@ -447,7 +447,7 @@ def test_public_installer_uv_preview_preserves_requested_extras(sandbox):
     _run([uv, "tool", "install", "--python", BASE_PYTHON, "nanobot-ai[feature]"], sandbox)
     _, artifact = _preview_manifest(sandbox, extras=("feature",))
     _installer(sandbox, *_wheel_arguments(sandbox, artifact))
-    record = tomllib.loads((prefix / "uv-receipt.toml").read_text())
+    record = tomllib.loads((prefix / "uv-receipt.toml").read_text(encoding="utf-8"))
     assert any(item.get("extras") == ["feature"] for item in record["tool"]["requirements"])
 
 
@@ -487,7 +487,7 @@ def test_public_installer_wrong_platform_keeps_original_environment(sandbox):
 
 
 def _bootstrap_program(script):
-    source = (SCRIPTS / script).read_text()
+    source = (SCRIPTS / script).read_text(encoding="utf-8")
     if script.endswith(".sh"):
         match = re.search(r"wheel_identity=[^\n]*<<'PY'\n(.*?)\nPY\n", source, re.S)
         assert match is not None
