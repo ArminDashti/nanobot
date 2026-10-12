@@ -4,9 +4,53 @@ from __future__ import annotations
 
 import pytest
 
-from nanobot.agent.tools.image_generation import ImageGenerationTool, reload_image_generation_tool
+from nanobot.agent.tools.image_generation import (
+    ImageGenerationTool,
+    register_image_generation_tool,
+    reload_image_generation_tool,
+)
 from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.config.loader import load_config, save_config
+from nanobot.webui.settings_models import create_provider_settings
+
+
+async def test_dynamic_image_overrides_reload_without_changing_inflight_client(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.json"
+    monkeypatch.setattr("nanobot.config.loader._current_config_path", tmp_path / "other-instance.json")
+    config = load_config(config_path)
+    name = create_provider_settings(config, {"name": ["Image gateway"], "apiBase": ["https://images.test/v1"]})
+    connection = getattr(config.providers, name)
+    connection.api_key = "named-image-key"
+    connection.extra_headers = {"X-Connection": "image"}
+    connection.extra_body = {"quality": "low"}
+    config.tools.image_generation.enabled = True
+    config.tools.image_generation.provider = name
+    config.tools.image_generation.extra_headers = {"X-Route": "before"}
+    config.tools.image_generation.extra_body = {"watermark": True}
+    save_config(config, config_path)
+    registry = ToolRegistry()
+    register_image_generation_tool(config, registry, workspace=tmp_path)
+    first_tool = registry.get("generate_image")
+    assert isinstance(first_tool, ImageGenerationTool)
+    first = first_tool._provider_client()
+    assert first is not None
+    definitions = registry.get_definitions()
+    config.tools.image_generation.extra_headers = {"X-Route": "after"}
+    config.tools.image_generation.extra_body = {"watermark": False}
+    save_config(config, config_path)
+    result = await reload_image_generation_tool(config_path=config_path, workspace=tmp_path, registry=registry)
+    assert result["requires_restart"] is False
+    second_tool = registry.get("generate_image")
+    assert isinstance(second_tool, ImageGenerationTool)
+    second = second_tool._provider_client()
+    assert second is not None
+    assert first.api_key == second.api_key == "named-image-key"
+    assert first.api_base == second.api_base == "https://images.test/v1"
+    assert first.extra_headers == {"X-Connection": "image", "X-Route": "before"}
+    assert second.extra_headers == {"X-Connection": "image", "X-Route": "after"}
+    assert first.extra_body == {"quality": "low", "watermark": True}
+    assert second.extra_body == {"quality": "low", "watermark": False}
+    assert registry.get_definitions() == definitions
 
 
 @pytest.mark.asyncio

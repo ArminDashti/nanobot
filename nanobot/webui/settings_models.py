@@ -1566,7 +1566,7 @@ def update_provider_settings(
         changed
         and image_config.enabled
         and image_config.provider == provider_key
-        and get_image_gen_provider(provider_key) is not None
+        and get_image_gen_provider(provider_key, updated_provider_config) is not None
     )
     return changed, restart_required
 

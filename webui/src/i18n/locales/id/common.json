@@ -811,6 +811,8 @@
       "capabilityOpenAISearchHelp": "Model yang didukung dapat mencari di web.\n\nIzinkan model yang kompatibel dengan Responses API mencari di web. Aktivitas pencarian ditampilkan di chat."
     },
     "image": {
+      "imagesApiHint": "Menggunakan OpenAI Images API di URL koneksi ini. Pastikan endpoint mendukung gambar.",
+      "requestOverridesHint": "Hanya untuk gambar. Kosongkan untuk memakai pengaturan penyedia. Mengganti penyedia menghapus nilai ini.",
       "selectProvider": "Pilih penyedia",
       "selectAspect": "Pilih rasio",
       "selectSize": "Pilih ukuran",

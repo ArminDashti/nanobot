@@ -316,7 +316,11 @@ export function useSettingsController({
       imageGenerationForm.model !== settings.image_generation.model ||
       imageGenerationForm.defaultAspectRatio !== settings.image_generation.default_aspect_ratio ||
       imageGenerationForm.defaultImageSize !== settings.image_generation.default_image_size ||
-      imageGenerationForm.maxImagesPerTurn !== settings.image_generation.max_images_per_turn
+      imageGenerationForm.maxImagesPerTurn !== settings.image_generation.max_images_per_turn ||
+      (settings.image_generation.request_overrides_supported && (
+        imageGenerationForm.extraHeaders !== providerJsonValue(settings.image_generation.extra_headers) ||
+        imageGenerationForm.extraBody !== providerJsonValue(settings.image_generation.extra_body)
+      )) === true
     );
   }, [imageGenerationForm, settings]);
 
@@ -598,6 +602,7 @@ export function useSettingsController({
     runProviderOAuth,
     saveImageGenerationSettings,
     saveModelSettings,
+    saveImageRequestSettings: capabilityActions.saveImageRequestSettings,
     saveNetworkSafetySettings,
     saveModelRequestSettings: modelActions.saveModelRequestSettings,
     saveProvider,

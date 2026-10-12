@@ -811,6 +811,8 @@
       "capabilityOpenAISearchHelp": "Los modelos compatibles pueden buscar en la web.\n\nPermite que los modelos compatibles con Responses API busquen en la web. La actividad de búsqueda aparece en el chat."
     },
     "image": {
+      "imagesApiHint": "Usa OpenAI Images API en la URL de esta conexión. Compruebe que admite imágenes.",
+      "requestOverridesHint": "Solo para imágenes. Los campos vacíos usan los ajustes del proveedor. Cambiar de proveedor borra estos valores.",
       "selectProvider": "Seleccionar proveedor",
       "selectAspect": "Seleccionar proporción",
       "selectSize": "Seleccionar tamaño",

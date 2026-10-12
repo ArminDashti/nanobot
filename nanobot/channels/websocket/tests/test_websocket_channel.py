@@ -4641,9 +4641,11 @@ async def test_settings_api_returns_safe_subset_and_updates_whitelist(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("provider_name", ["openrouter", "SenseNova"])
 async def test_image_settings_hot_reload_without_restart(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    provider_name: str,
 ) -> None:
     from nanobot.agent.loop import AgentLoop
     from nanobot.agent.tools.image_generation import (
@@ -4653,7 +4655,10 @@ async def test_image_settings_hot_reload_without_restart(
 
     port = 29935
     config_path = tmp_path / "config.json"
-    config = Config()
+    config = Config.model_validate({"providers": {"SenseNova": {
+        "apiKey": "named-image-key", "apiBase": "https://images.test/v1",
+        "extraHeaders": {"X-Connection": "named"},
+    }}})
     config.providers.openrouter.api_key = "image-key"
     save_config(config, config_path)
     monkeypatch.setattr("nanobot.config.loader._current_config_path", config_path)
@@ -4681,7 +4686,11 @@ async def test_image_settings_hot_reload_without_restart(
         response = await _webui_mutate(
             webui_client,
             "settings.image_generation.update",
-            {"enabled": True, "provider": "openrouter", "model": "openai/gpt-image-1"},
+            {
+                "enabled": True, "provider": provider_name, "model": "openai/gpt-image-1",
+                "extra_headers": {"X-Image": "configured"},
+                "extra_body": {"watermark": False},
+            },
         )
 
         assert response.status_code == 200
@@ -4690,7 +4699,13 @@ async def test_image_settings_hot_reload_without_restart(
         tool = agent.tools.get("generate_image")
         assert isinstance(tool, ImageGenerationTool)
         assert tool.config.model == "openai/gpt-image-1"
-        assert tool.provider_configs["openrouter"].api_key == "image-key"
+        client = tool._provider_client()
+        assert client is not None
+        assert client.api_key == ("image-key" if provider_name == "openrouter" else "named-image-key")
+        assert client.extra_headers["X-Image"] == "configured"
+        if provider_name == "SenseNova":
+            assert client.extra_headers["X-Connection"] == "named"
+        assert client.extra_body == {"watermark": False}
         assert agent.tools.has("read_file")
         assert runtime_bus.inbound_size == 0
 

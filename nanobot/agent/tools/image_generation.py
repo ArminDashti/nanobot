@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -47,6 +48,8 @@ class ImageGenerationToolConfig(Base):
     default_image_size: str = "1K"
     max_images_per_turn: int = Field(default=4, ge=1, le=8)
     save_dir: str = "generated"
+    extra_headers: dict[str, str] | None = Field(default=None, repr=False)
+    extra_body: dict[str, Any] | None = Field(default=None, repr=False)
 
 
 @tool_parameters(
@@ -125,16 +128,20 @@ class ImageGenerationTool(Tool):
 
     def _provider_client(self) -> ImageGenerationProvider | None:
         provider = self._provider_config()
-        cls = get_image_gen_provider(self.config.provider)
+        cls = get_image_gen_provider(self.config.provider, provider)
         if cls is None:
             return None
+        headers = dict(provider.extra_headers or {}) if provider else {}
+        overridden = {key.lower() for key in (self.config.extra_headers or {})}
+        headers = {key: value for key, value in headers.items() if key.lower() not in overridden}
+        headers.update(self.config.extra_headers or {})
+        body = deepcopy(provider.extra_body or {}) if provider else {}
+        body.update(deepcopy(self.config.extra_body or {}))
         kwargs: dict[str, Any] = {
             "api_key": provider.api_key if provider and isinstance(provider.api_key, str) else None,
             "api_base": provider.api_base if provider and isinstance(provider.api_base, str) else None,
-            "extra_headers": provider.extra_headers
-            if provider and isinstance(provider.extra_headers, dict) else None,
-            "extra_body": provider.extra_body
-            if provider and isinstance(provider.extra_body, dict) else None,
+            "extra_headers": headers or None,
+            "extra_body": body or None,
             "proxy": provider.proxy if provider and isinstance(provider.proxy, str) else None,
         }
         return cls(**kwargs)

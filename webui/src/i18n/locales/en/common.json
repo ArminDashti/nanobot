@@ -1238,6 +1238,8 @@
       "thirdPartyBrands": "Product names, logos, and brands are property of their respective owners. Use is for identification only and does not imply endorsement."
     },
     "image": {
+      "imagesApiHint": "Uses the OpenAI Images API at this connection's URL. Check that the endpoint supports image generation.",
+      "requestOverridesHint": "Only for images. Leave fields empty to use provider settings. Changing the provider clears these values.",
       "selectProvider": "Select provider",
       "selectAspect": "Select aspect",
       "selectSize": "Select size",

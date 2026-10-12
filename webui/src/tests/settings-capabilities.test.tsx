@@ -8,6 +8,51 @@ import { requestMutationMock, jsonResponse, settingsPayload, renderSettingsView,
 describe("Settings capabilities", () => {
   installSettingsViewTestHooks();
 
+  it("uses a named image connection and saves image-only parameters", async () => {
+    const payload = settingsPayload();
+    payload.image_generation = {
+      ...payload.image_generation, enabled: true, provider: "custom-sensenova",
+      request_overrides_supported: true,
+      providers: [{ name: "custom-sensenova", label: "SenseNova", configured: true, uses_images_api: true, api_base: "https://images.test/v1" }],
+    };
+    requestMutationMock.mockImplementation(async (_action, args) => ({
+      ...payload, image_generation: {
+        ...payload.image_generation,
+        extra_headers: args.extra_headers ? JSON.parse(args.extra_headers) : null,
+        extra_body: args.extra_body ? JSON.parse(args.extra_body) : null,
+      },
+    }));
+    requestMutationMock.mockRejectedValueOnce(new Error("Could not save. Try again."));
+    renderSettingsView({ initialSection: "image", initialSettings: payload });
+    expect(screen.getByRole("combobox", { name: "SenseNova", exact: true })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Provider", exact: true })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Advanced options" }));
+    fireEvent.click(screen.getByRole("button", { name: "Body parameters Use provider settings Edit" }));
+    const editor = screen.getByRole("dialog", { name: "Body parameters" });
+    fireEvent.change(within(editor).getByRole("textbox", { name: "Body parameters" }), { target: { value: '{"watermark":false}' } });
+    fireEvent.click(within(editor).getByRole("button", { name: "Save", exact: true }));
+    expect(await within(editor).findByRole("alert")).toHaveTextContent("Could not save. Try again.");
+    expect(within(editor).getByRole("textbox")).toHaveValue('{"watermark":false}');
+    fireEvent.click(within(editor).getByRole("button", { name: "Save", exact: true }));
+    await waitFor(() => expect(requestMutationMock).toHaveBeenCalledWith(
+      "settings.image_generation.update",
+      expect.objectContaining({ provider: "custom-sensenova", extra_body: '{"watermark":false}' }),
+      20_000,
+    ));
+    expect(await screen.findByRole("button", { name: "Body parameters Entries: 1 Edit" })).toBeEnabled();
+  });
+
+  it("does not display a different image connection when the saved one is missing", () => {
+    const payload = settingsPayload();
+    payload.image_generation = {
+      ...payload.image_generation, enabled: true, provider: "missing-connection",
+      providers: [{ name: "openai", label: "OpenAI", configured: true, api_base: "https://unrelated.test" }],
+    };
+    renderSettingsView({ initialSection: "image", initialSettings: payload });
+    expect(screen.queryByText("https://unrelated.test")).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("Configure this provider");
+  });
+
   it("opens configuration for disabled features without enabling them", () => {
     const payload = settingsPayload();
     payload.image_generation.enabled = false;

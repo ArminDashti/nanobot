@@ -811,6 +811,8 @@
       "capabilityOpenAISearchHelp": "Mô hình được hỗ trợ có thể tìm kiếm web.\n\nCho phép các mô hình tương thích với Responses API tìm kiếm trên web. Hoạt động tìm kiếm được hiển thị trong cuộc trò chuyện."
     },
     "image": {
+      "imagesApiHint": "Dùng OpenAI Images API tại URL kết nối này. Kiểm tra xem điểm cuối có hỗ trợ tạo ảnh không.",
+      "requestOverridesHint": "Chỉ dành cho ảnh. Để trống để dùng thiết lập nhà cung cấp. Đổi nhà cung cấp sẽ xóa các giá trị này.",
       "selectProvider": "Chọn nhà cung cấp",
       "selectAspect": "Chọn tỷ lệ",
       "selectSize": "Chọn kích thước",

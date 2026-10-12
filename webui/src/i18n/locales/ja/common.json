@@ -811,6 +811,8 @@
       "capabilityOpenAISearchHelp": "対応するモデルがウェブ検索を使えます。\n\nResponses API 対応モデルがウェブを検索できるようにします。検索状況はチャットに表示されます。"
     },
     "image": {
+      "imagesApiHint": "この接続先で OpenAI Images API を使います。画像生成に対応していることを確認してください。",
+      "requestOverridesHint": "画像専用です。空欄はプロバイダー設定を使用します。プロバイダーを変更すると、ここに入力した値は消去されます。",
       "selectProvider": "プロバイダーを選択",
       "selectAspect": "比率を選択",
       "selectSize": "サイズを選択",

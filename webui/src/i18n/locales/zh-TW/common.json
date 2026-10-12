@@ -811,6 +811,8 @@
       "capabilityOpenAISearchHelp": "支援的模型可聯網搜尋"
     },
     "image": {
+      "imagesApiHint": "透過此連線的網址呼叫 OpenAI Images API。請確認該介面支援生圖。",
+      "requestOverridesHint": "僅用於生圖。留空時使用供應商設定，更換供應商會清空這裡填寫的值。",
       "selectProvider": "選擇供應商",
       "selectAspect": "選擇比例",
       "selectSize": "選擇尺寸",
