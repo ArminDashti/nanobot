@@ -65,6 +65,7 @@ export interface SendAttachment {
 }
 
 export interface SendOptions {
+  userShell?: boolean;
   intent?: "create_automation";
   cliApps?: OutboundCliAppMention[];
   mcpPresets?: OutboundMcpPresetMention[];
