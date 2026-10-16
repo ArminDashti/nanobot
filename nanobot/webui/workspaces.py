@@ -44,8 +44,9 @@ def _scope_change_is_non_escalating(current: WorkspaceScope, requested: Workspac
     )
 
 
-def webui_workspace_state_path() -> Path:
-    return get_webui_dir() / "workspace-state.json"
+def webui_workspace_state_path(*, home: Path | None = None) -> Path:
+    directory = home.expanduser().resolve() / "webui" if home is not None else get_webui_dir()
+    return directory / "workspace-state.json"
 
 
 def default_webui_workspace_state() -> dict[str, Any]:
@@ -89,8 +90,8 @@ def remember_webui_project(path: Path) -> None:
             logger.exception("failed to save recent WebUI projects")
 
 
-def read_webui_workspace_state() -> dict[str, Any]:
-    path = webui_workspace_state_path()
+def read_webui_workspace_state(*, home: Path | None = None) -> dict[str, Any]:
+    path = webui_workspace_state_path(home=home)
     if not path.is_file():
         return default_webui_workspace_state()
     try:
@@ -105,7 +106,7 @@ def read_webui_workspace_state() -> dict[str, Any]:
     return normalize_webui_workspace_state(raw)
 
 
-def write_webui_workspace_state(raw: dict[str, Any]) -> dict[str, Any]:
+def write_webui_workspace_state(raw: dict[str, Any], *, home: Path | None = None) -> dict[str, Any]:
     state = normalize_webui_workspace_state(raw)
     state["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     encoded = json.dumps(
@@ -117,7 +118,7 @@ def write_webui_workspace_state(raw: dict[str, Any]) -> dict[str, Any]:
     if len(encoded) > _MAX_STATE_FILE_BYTES:
         raise ValueError("workspace state is too large")
 
-    path = webui_workspace_state_path()
+    path = webui_workspace_state_path(home=home)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".json.tmp")
     with open(tmp, "wb") as f:
@@ -137,22 +138,22 @@ def write_webui_workspace_state(raw: dict[str, Any]) -> dict[str, Any]:
     return state
 
 
-def read_webui_default_access_mode() -> str:
-    state = read_webui_workspace_state()
+def read_webui_default_access_mode(*, home: Path | None = None) -> str:
+    state = read_webui_workspace_state(home=home)
     mode = state.get("default_access_mode")
     return mode if mode in _DEFAULT_ACCESS_MODES else "default"
 
 
-def write_webui_default_access_mode(mode: str) -> bool:
+def write_webui_default_access_mode(mode: str, *, home: Path | None = None) -> bool:
     if mode == _LEGACY_RESTRICTED_DEFAULT_ACCESS_MODE:
         mode = "default"
     if mode not in _DEFAULT_ACCESS_MODES:
         raise ValueError("default access mode must be default or full")
-    state = read_webui_workspace_state()
+    state = read_webui_workspace_state(home=home)
     changed = state.get("default_access_mode") != mode
     if changed:
         state["default_access_mode"] = mode
-        write_webui_workspace_state(state)
+        write_webui_workspace_state(state, home=home)
     return changed
 
 

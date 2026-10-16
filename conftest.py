@@ -19,7 +19,7 @@ from loguru import logger
 def _isolate_instance_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from nanobot.config import home, loader
 
-    user_home = tmp_path / "user-home"
+    user_home = tmp_path.parent / "instance-homes" / uuid4().hex
     monkeypatch.setenv("HOME", str(user_home))
     monkeypatch.setenv("USERPROFILE", str(user_home))
     monkeypatch.setattr(home, "_home_path", None)
