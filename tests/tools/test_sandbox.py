@@ -505,5 +505,10 @@ def test_sandbox_media_access_uses_bound_home(tmp_path, monkeypatch, backend):
 
     command = wrap_command(backend, "echo hello", str(workspace), str(workspace), home=first_home)
 
-    assert str(first_home / "media") in command
-    assert str(second_home / "media") not in command
+    tokens = _parse(command)
+    if backend == "seatbelt":
+        assert _sbpl_quote(str(first_home / "media")) in tokens[2]
+        assert _sbpl_quote(str(second_home / "media")) not in tokens[2]
+    else:
+        assert str(first_home / "media") in tokens
+        assert str(second_home / "media") not in tokens

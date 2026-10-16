@@ -61,7 +61,15 @@ def test_refresh_retains_captured_home_and_same_home_lock(tmp_path, monkeypatch)
     second.save(_token("b"))
     entered = threading.Event()
     finish = threading.Event()
+    same_home_loaded = threading.Event()
+    same_home = codex_token_storage(tmp_path / "a")
+    load = same_home.load
     refreshes = []
+
+    def load_same_home():
+        token = load()
+        same_home_loaded.set()
+        return token
 
     def refresh(refresh_token, provider, proxy):
         refreshes.append(refresh_token)
@@ -70,12 +78,14 @@ def test_refresh_retains_captured_home_and_same_home_lock(tmp_path, monkeypatch)
         return _token("rotated-a")
 
     monkeypatch.setattr(flow, "_refresh_token", refresh)
+    monkeypatch.setattr(same_home, "load", load_same_home)
     monkeypatch.setattr(home_module, "_home_path", tmp_path / "b")
     monkeypatch.setenv("OAUTH_CLI_KIT_TOKEN_PATH", str(second.get_token_path()))
     with ThreadPoolExecutor(max_workers=2) as pool:
         one = pool.submit(get_token, storage=first)
         assert entered.wait(2)
-        two = pool.submit(get_token, storage=codex_token_storage(tmp_path / "a"))
+        two = pool.submit(get_token, storage=same_home)
+        assert same_home_loaded.wait(2)
         finish.set()
         assert one.result().access == two.result().access == "rotated-a"
     assert refreshes == ["refresh-a"]

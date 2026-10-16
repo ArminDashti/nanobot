@@ -622,7 +622,7 @@ def test_config_bound_plugin_approval_and_data_survive_home_change(tmp_path, mon
     data = Path(server.env["PLUGIN_DATA"])
     assert data.is_relative_to(first_home / "plugin-data")
     assert server.cwd == str(data)
-    assert server.args == [str(data / "state")]
+    assert [Path(arg) for arg in server.args] == [data / "state"]
     assert discover_agent_plugins(workspace, home=first_home)[0].enabled is True
     assert discover_agent_plugins(workspace, home=second_home)[0].enabled is False
 

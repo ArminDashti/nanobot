@@ -103,7 +103,7 @@ def test_config_snapshot_and_save_survive_selection_and_environment_copy(tmp_pat
     assert resolved.source_path == source
     assert config.agents.defaults.workspace == "${TEST_WORKSPACE}"
     loader.save_config(config)
-    assert json.loads(source.read_text())["agents"]["defaults"]["workspace"] == "${TEST_WORKSPACE}"
+    assert json.loads(source.read_text(encoding="utf-8"))["agents"]["defaults"]["workspace"] == "${TEST_WORKSPACE}"
     assert not (tmp_path / "second-config.json").exists()
     assert not home.exists()
 

@@ -20,6 +20,8 @@ def _isolate_instance_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     from nanobot.config import home, loader
 
     user_home = tmp_path.parent / "instance-homes" / uuid4().hex
+    if os.name == "nt":
+        (user_home / "AppData" / "Local").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(user_home))
     monkeypatch.setenv("USERPROFILE", str(user_home))
     monkeypatch.setattr(home, "_home_path", None)
