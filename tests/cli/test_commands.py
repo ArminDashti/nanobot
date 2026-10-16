@@ -1858,20 +1858,22 @@ def test_agent_custom_config_workspace_does_not_migrate_legacy_cron(
 
 def test_agent_overrides_workspace_path(mock_agent_runtime):
     workspace_path = Path("/tmp/agent-workspace")
+    expected_workspace = workspace_path.resolve()
 
     result = runner.invoke(app, ["agent", "-m", "hello", "-w", str(workspace_path)])
 
     assert result.exit_code == 0
-    assert mock_agent_runtime["config"].agents.defaults.workspace == str(workspace_path)
-    assert mock_agent_runtime["sync_templates"].call_args.args == (workspace_path,)
+    assert mock_agent_runtime["config"].agents.defaults.workspace == str(expected_workspace)
+    assert mock_agent_runtime["sync_templates"].call_args.args == (expected_workspace,)
     passed_config = mock_agent_runtime["from_config"].call_args.args[0]
-    assert passed_config.workspace_path == workspace_path
+    assert passed_config.workspace_path == expected_workspace
 
 
 def test_agent_workspace_override_wins_over_config_workspace(mock_agent_runtime, tmp_path: Path):
     config_path = tmp_path / "agent-config.json"
     config_path.write_text("{}")
     workspace_path = Path("/tmp/agent-workspace")
+    expected_workspace = workspace_path.resolve()
 
     result = runner.invoke(
         app,
@@ -1880,10 +1882,10 @@ def test_agent_workspace_override_wins_over_config_workspace(mock_agent_runtime,
 
     assert result.exit_code == 0
     assert mock_agent_runtime["load_config"].call_args.args == (config_path.resolve(),)
-    assert mock_agent_runtime["config"].agents.defaults.workspace == str(workspace_path)
-    assert mock_agent_runtime["sync_templates"].call_args.args == (workspace_path,)
+    assert mock_agent_runtime["config"].agents.defaults.workspace == str(expected_workspace)
+    assert mock_agent_runtime["sync_templates"].call_args.args == (expected_workspace,)
     passed_config = mock_agent_runtime["from_config"].call_args.args[0]
-    assert passed_config.workspace_path == workspace_path
+    assert passed_config.workspace_path == expected_workspace
 
 
 @pytest.mark.parametrize(
@@ -2843,8 +2845,9 @@ def test_webui_rejects_active_home_with_different_paths_before_writing(
 
     assert result.exit_code == 1, result.output
     assert "different paths" in result.output
-    assert str(active_config) in result.output
-    assert str(active_workspace) in result.output
+    rendered_output = "".join(result.output.split())
+    assert "".join(str(active_config).split()) in rendered_output
+    assert "".join(str(active_workspace).split()) in rendered_output
     assert requested_config.read_bytes() == before
     assert not requested_workspace.exists()
 
