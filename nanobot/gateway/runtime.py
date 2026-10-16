@@ -136,7 +136,6 @@ class GatewayRuntimePaths(ProcessRuntimePaths):
         cls,
         *,
         data_dir: Path | None = None,
-        config_path: Path | None = None,
     ) -> "GatewayRuntimePaths":
         base = data_dir or get_data_dir()
         run_dir = base / "run"
@@ -146,7 +145,6 @@ class GatewayRuntimePaths(ProcessRuntimePaths):
             logs_dir=logs_dir,
             state_path=run_dir / "gateway.json",
             log_path=logs_dir / "gateway.log",
-            legacy_config_path=config_path,
         )
 
 
@@ -179,7 +177,6 @@ class GatewayInstance:
             workspace=resolved_workspace,
             paths=GatewayRuntimePaths.for_instance(
                 data_dir=resolved_home,
-                config_path=resolved_config,
             ),
         )
 
@@ -281,7 +278,7 @@ class GatewayRuntime(ManagedProcessRuntime[GatewayStartOptions]):
     def status(self, *, reason: str | None = None) -> GatewayStatus:
         """Return process, launch, and client lifetime state in one snapshot."""
         process = super().status(reason=reason)
-        state = self._read_state(process.state_path) if process.running else None
+        state = self._read_state() if process.running else None
         raw_mode = state.get("launch_mode") if state else None
         launch_mode: GatewayLaunchMode = (
             raw_mode if raw_mode in {"foreground", "background"} else "unknown"

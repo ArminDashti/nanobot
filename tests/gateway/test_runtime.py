@@ -1300,7 +1300,7 @@ def test_stop_succeeds_when_process_exits_at_timeout_boundary(tmp_path, monkeypa
     )
     statuses = iter([running, stopped])
     monkeypatch.setattr(runtime, "status", lambda **_kwargs: next(statuses))
-    monkeypatch.setattr(runtime, "_read_state", lambda _path: {"pid": 12345, "identity": 12345})
+    monkeypatch.setattr(runtime, "_read_state", lambda: {"pid": 12345, "identity": 12345})
     monkeypatch.setattr(runtime, "_process_identity_match", lambda *_args: "match")
     monkeypatch.setattr(runtime, "_terminate", lambda *_args, **_kwargs: False)
 

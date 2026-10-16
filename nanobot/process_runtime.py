@@ -77,29 +77,6 @@ class ProcessRuntimePaths:
     logs_dir: Path
     state_path: Path
     log_path: Path
-    legacy_config_path: Path | None = None
-
-
-class RuntimeOwnershipConflictError(RuntimeError):
-    """Live records prevent choosing a component owner safely."""
-
-    def __init__(
-        self, service: str, statuses: list[ProcessStatus], *, unknown_home: bool = False,
-    ) -> None:
-        records = "\n".join(
-            f"  {status.state_path} (PID {status.pid})" for status in statuses
-        )
-        problem = (
-            f"A live legacy {service} record beside the selected config does not identify "
-            "its home. Cannot safely start or stop this component. "
-            if unknown_home else
-            f"Multiple live {service} processes have runtime records in this home. "
-        )
-        super().__init__(
-            problem +
-            "Stop them from their original terminals or process supervisors before "
-            f"starting the upgraded {service}.\n{records}"
-        )
 
 
 _StartOptionsT = TypeVar("_StartOptionsT", bound=ProcessStartOptions)
@@ -197,8 +174,8 @@ class ManagedProcessRuntime(Generic[_StartOptionsT]):
         if not status.pid:
             return ProcessResult(False, self._message("not_running"), status)
 
-        state = self._read_state(status.state_path)
-        identity_match = self._runtime_identity_match(state, status.pid, status.state_path)
+        state = self._read_state()
+        identity_match = self._process_identity_match(state, status.pid)
         if identity_match == "unknown":
             return ProcessResult(
                 False,
@@ -206,7 +183,7 @@ class ManagedProcessRuntime(Generic[_StartOptionsT]):
                 status,
             )
         if identity_match == "mismatch":
-            self._clear_state(status.state_path)
+            self._clear_state()
             return ProcessResult(
                 False,
                 self._message("state_stale"),
@@ -222,15 +199,8 @@ class ManagedProcessRuntime(Generic[_StartOptionsT]):
                     final_status,
                 )
             return ProcessResult(True, self._message("stopped"), final_status)
-        self._clear_state(status.state_path)
-        stopped = type(status)(
-            running=False,
-            pid=None,
-            state_path=self.paths.state_path,
-            log_path=self.paths.log_path,
-            reason="stopped",
-        )
-        return ProcessResult(True, self._message("stopped"), stopped)
+        self._clear_state()
+        return ProcessResult(True, self._message("stopped"), self.status(reason="stopped"))
 
     def restart(self, options: _StartOptionsT, *, timeout_s: int = 20) -> ProcessResult:
         """Restart the managed process."""
@@ -246,66 +216,25 @@ class ManagedProcessRuntime(Generic[_StartOptionsT]):
 
     def status(self, *, reason: str | None = None) -> ProcessStatus:
         """Return live status, clearing stale state when needed."""
-        canonical = self._status_at_path(self.paths.state_path, reason=reason)
-        if self.paths.state_path.name != f"{self.service_name}.json":
-            return canonical
-        active = [canonical] if canonical.running else []
-        for path in sorted(self.paths.run_dir.glob(f"{self.service_name}.*.json")):
-            # Released runtimes used a 16-digit selector hash, never client lease files.
-            if not re.fullmatch(rf"{self.service_name}\.[0-9a-f]{{16}}\.json", path.name):
-                continue
-            status = self._status_at_path(path, reason=reason)
-            if status.running:
-                active.append(status)
-        config = self.paths.legacy_config_path
-        ambiguous: list[ProcessStatus] = []
-        if config is not None and not _same_path(str(config.parent / "run"), str(self.paths.run_dir)):
-            for path in sorted((config.parent / "run").glob(f"{self.service_name}.*.json")):
-                if not re.fullmatch(rf"{self.service_name}\.[0-9a-f]{{16}}\.json", path.name):
-                    continue
-                state = self._read_state(path)
-                if not state or not _same_path(_as_str(state.get("config_path")), str(config)):
-                    continue
-                home = _recorded_home(state)
-                if home is not None and not _same_path(home, str(self.paths.run_dir.parent)):
-                    continue
-                status = self._status_at_path(path, reason=reason)
-                if status.running:
-                    if home is None:
-                        ambiguous.append(status)
-                    else:
-                        active.append(status)
-        if len(active) > 1:
-            raise RuntimeOwnershipConflictError(self.service_name, active)
-        if ambiguous and not (
-            canonical.running and canonical.pid is not None
-            and self._runtime_identity_match(
-                self._read_state(canonical.state_path), canonical.pid, canonical.state_path,
-            ) == "match"
-        ):
-            raise RuntimeOwnershipConflictError(self.service_name, ambiguous, unknown_home=True)
-        return active[0] if active else canonical
-
-    def _status_at_path(self, path: Path, *, reason: str | None) -> ProcessStatus:
-        state = self._read_state(path)
+        state = self._read_state()
         pid = _as_int(state.get("pid")) if state else None
         if pid is None:
             return ProcessStatus(
                 running=False,
                 pid=None,
-                state_path=path,
+                state_path=self.paths.state_path,
                 log_path=self.paths.log_path,
                 reason=reason or "not_started",
             )
         assert state is not None
 
-        identity_match = self._runtime_identity_match(state, pid, path)
+        identity_match = self._process_identity_match(state, pid)
         if not self._is_pid_running(pid) or identity_match == "mismatch":
-            self._clear_state(path)
+            self._clear_state()
             return ProcessStatus(
                 running=False,
                 pid=None,
-                state_path=path,
+                state_path=self.paths.state_path,
                 log_path=self.paths.log_path,
                 reason=reason or "stale_state",
             )
@@ -314,11 +243,8 @@ class ManagedProcessRuntime(Generic[_StartOptionsT]):
         return ProcessStatus(
             running=True,
             pid=pid,
-            state_path=path,
-            log_path=(
-                self.paths.log_path if path == self.paths.state_path
-                else path.parent.parent / "logs" / f"{path.stem}.log"
-            ),
+            state_path=self.paths.state_path,
+            log_path=self.paths.log_path,
             started_at=_as_str(state.get("started_at")),
             port=_as_int(state.get("port")),
             command=tuple(cast(list[str], command)) if isinstance(command, list) else (),
@@ -329,15 +255,6 @@ class ManagedProcessRuntime(Generic[_StartOptionsT]):
             workspace=_as_str(state.get("workspace")),
             home=_as_str(state.get("home")),
         )
-
-    def _runtime_identity_match(
-        self, state: dict[str, Any] | None, pid: int, path: Path,
-    ) -> Literal["match", "mismatch", "unknown"]:
-        if path != self.paths.state_path and state and (
-            state.get("stable_identity") is None and state.get("identity") is None
-        ):
-            return "unknown"
-        return self._process_identity_match(state, pid)
 
     @staticmethod
     def selectors_mismatch(status: ProcessStatus, options: ProcessStartOptions) -> bool:
@@ -359,16 +276,13 @@ class ManagedProcessRuntime(Generic[_StartOptionsT]):
 
     def read_log_tail(self, *, tail: int = 200) -> list[str]:
         """Return the last ``tail`` log lines."""
-        if tail <= 0:
-            return []
-        log_path = self.status().log_path
-        if not log_path.exists():
+        if tail <= 0 or not self.paths.log_path.exists():
             return []
         lines: list[str] = []
         paths = [
-            log_path,
+            self.paths.log_path,
             *(
-                log_path.with_name(f"{log_path.name}.{index}")
+                self.paths.log_path.with_name(f"{self.paths.log_path.name}.{index}")
                 for index in range(1, DEFAULT_BACKUP_COUNT + 1)
             ),
         ]
@@ -384,12 +298,11 @@ class ManagedProcessRuntime(Generic[_StartOptionsT]):
 
     def follow_logs(self, *, tail: int = 200) -> int:
         """Print existing log lines and follow new output."""
-        log_path = self.status().log_path
         for line in self.read_log_tail(tail=tail):
             print(line)
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_path.touch(exist_ok=True)
-        handle = log_path.open("r", encoding="utf-8", errors="replace")
+        self.paths.logs_dir.mkdir(parents=True, exist_ok=True)
+        self.paths.log_path.touch(exist_ok=True)
+        handle = self.paths.log_path.open("r", encoding="utf-8", errors="replace")
         try:
             try:
                 handle.seek(0, os.SEEK_END)
@@ -397,9 +310,9 @@ class ManagedProcessRuntime(Generic[_StartOptionsT]):
                     line = handle.readline()
                     if line:
                         print(line.rstrip("\n"))
-                    elif self._log_file_replaced(handle, log_path):
+                    elif self._log_file_replaced(handle):
                         handle.close()
-                        handle = log_path.open(
+                        handle = self.paths.log_path.open(
                             "r", encoding="utf-8", errors="replace"
                         )
                     else:
@@ -409,11 +322,11 @@ class ManagedProcessRuntime(Generic[_StartOptionsT]):
         finally:
             handle.close()
 
-    def _log_file_replaced(self, handle: Any, log_path: Path) -> bool:
+    def _log_file_replaced(self, handle: Any) -> bool:
         """Return whether rotation replaced or truncated the followed log file."""
         try:
             opened = os.fstat(handle.fileno())
-            current = log_path.stat()
+            current = self.paths.log_path.stat()
             same_file = (opened.st_dev, opened.st_ino) == (current.st_dev, current.st_ino)
             return not same_file or current.st_size < handle.tell()
         except OSError:
@@ -600,9 +513,9 @@ class ManagedProcessRuntime(Generic[_StartOptionsT]):
             recorded = state.get("identity")
         return self.process_identity_match(recorded, pid)
 
-    def _read_state(self, path: Path | None = None) -> dict[str, Any] | None:
+    def _read_state(self) -> dict[str, Any] | None:
         try:
-            with (path or self.paths.state_path).open(encoding="utf-8") as handle:
+            with self.paths.state_path.open(encoding="utf-8") as handle:
                 payload = json.load(handle)
         except (OSError, json.JSONDecodeError, ValueError):
             return None
@@ -626,8 +539,8 @@ class ManagedProcessRuntime(Generic[_StartOptionsT]):
         finally:
             tmp_path.unlink(missing_ok=True)
 
-    def _clear_state(self, path: Path | None = None) -> None:
-        (path or self.paths.state_path).unlink(missing_ok=True)
+    def _clear_state(self) -> None:
+        self.paths.state_path.unlink(missing_ok=True)
 
 
 def _platform_name() -> str:
@@ -701,19 +614,6 @@ def _as_int(value: object) -> int | None:
 
 def _as_str(value: object) -> str | None:
     return value if isinstance(value, str) else None
-
-
-def _recorded_home(state: dict[str, Any]) -> str | None:
-    home = _as_str(state.get("home"))
-    if home is not None:
-        return home
-    command = state.get("command")
-    if isinstance(command, list):
-        arguments = cast(list[object], command)
-        for index, argument in enumerate(arguments[:-1]):
-            if argument == "--home":
-                return _as_str(arguments[index + 1])
-    return None
 
 
 def _same_path(left: str | None, right: str | None) -> bool:
