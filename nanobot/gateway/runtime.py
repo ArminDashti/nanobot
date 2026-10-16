@@ -136,6 +136,7 @@ class GatewayRuntimePaths(ProcessRuntimePaths):
         cls,
         *,
         data_dir: Path | None = None,
+        config_path: Path | None = None,
     ) -> "GatewayRuntimePaths":
         base = data_dir or get_data_dir()
         run_dir = base / "run"
@@ -145,6 +146,7 @@ class GatewayRuntimePaths(ProcessRuntimePaths):
             logs_dir=logs_dir,
             state_path=run_dir / "gateway.json",
             log_path=logs_dir / "gateway.log",
+            legacy_config_path=config_path,
         )
 
 
@@ -177,6 +179,7 @@ class GatewayInstance:
             workspace=resolved_workspace,
             paths=GatewayRuntimePaths.for_instance(
                 data_dir=resolved_home,
+                config_path=resolved_config,
             ),
         )
 

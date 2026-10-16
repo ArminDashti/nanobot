@@ -25,7 +25,7 @@ class ApiStartOptions(ProcessStartOptions):
     host: str = "127.0.0.1"
 
 
-def api_runtime_paths(home: Path) -> ProcessRuntimePaths:
+def api_runtime_paths(home: Path, *, config_path: Path | None = None) -> ProcessRuntimePaths:
     """Return the API process state and log paths for one home."""
     resolved = home.expanduser().resolve(strict=False)
     run_dir = resolved / "run"
@@ -35,6 +35,7 @@ def api_runtime_paths(home: Path) -> ProcessRuntimePaths:
         logs_dir=logs_dir,
         state_path=run_dir / "api.json",
         log_path=logs_dir / "api.log",
+        legacy_config_path=(config_path.expanduser().resolve(strict=False) if config_path else None),
     )
 
 

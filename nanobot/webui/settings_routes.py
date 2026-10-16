@@ -597,7 +597,9 @@ class WebUISettingsRouter:
         return self._query(request)
 
     def _api_runtime(self) -> ApiRuntime:
-        return ApiRuntime(paths=api_runtime_paths(self.settings.config.instance_home))
+        return ApiRuntime(paths=api_runtime_paths(
+            self.settings.config.instance_home, config_path=self.settings.config.path,
+        ))
 
     def _save_channel_config_values(
         self,

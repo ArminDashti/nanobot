@@ -3,6 +3,7 @@ import json
 import subprocess
 import sys
 from contextlib import contextmanager
+from dataclasses import replace
 
 import pytest
 
@@ -30,7 +31,7 @@ def component(request, tmp_path):
 
 
 @contextmanager
-def live_record(runtime, options, path):
+def live_record(runtime, options, path, *, command=()):
     child = subprocess.Popen(
         [sys.executable, "-u", "-c", "print('ready'); input()"],
         stdin=subprocess.PIPE,
@@ -48,6 +49,7 @@ def live_record(runtime, options, path):
             "config_path": options.config_path,
             "workspace": options.workspace,
             "launch_mode": "background",
+            "command": command,
             **runtime.process_identity_record(child.pid),
         }))
         yield child
@@ -166,3 +168,132 @@ def test_upgrade_reads_and_follows_selected_owners_rotated_logs(component, monke
 
     assert capsys.readouterr().out.splitlines() == ["older", "current", "after-rotation"]
     assert not runtime.paths.log_path.exists()
+
+
+@pytest.fixture
+def external_component(component, tmp_path):
+    runtime, options, legacy_path = component
+    config = tmp_path / "external" / "custom.json"
+    options = replace(options, config_path=str(config))
+    if runtime.service_name == "gateway":
+        instance = GatewayInstance.resolve(
+            home=tmp_path, config_path=config, workspace=options.workspace,
+        )
+        runtime = GatewayRuntime(paths=instance.paths)
+    else:
+        runtime = ApiRuntime(paths=api_runtime_paths(tmp_path, config_path=config))
+    return runtime, options, config.parent / "run" / legacy_path.name
+
+
+def test_upgrade_manages_external_gateway_owner(tmp_path):
+    config = tmp_path / "external" / "custom.json"
+    instance = GatewayInstance.resolve(home=tmp_path, config_path=config)
+    runtime = GatewayRuntime(paths=instance.paths)
+    options = instance.start_options(port=18790)
+    legacy_path = config.parent / "run" / "gateway.0123456789abcdef.json"
+    command = ["python", "-m", "nanobot", "--home", str(tmp_path), "gateway", "--config", str(config)]
+    with live_record(runtime, options, legacy_path, command=command) as child:
+        log_path = config.parent / "logs" / f"{legacy_path.stem}.log"
+        log_path.parent.mkdir()
+        log_path.write_text("external owner\n", encoding="utf-8")
+
+        status = runtime.status()
+        assert status.pid == child.pid and status.state_path == legacy_path
+        assert status.home == str(tmp_path)
+        assert status.log_path == log_path
+        assert runtime.read_log_tail() == ["external owner"]
+        assert not runtime.start_background(options).ok
+        with pytest.raises(RuntimeError):
+            with runtime.foreground_instance(options):
+                pytest.fail("claimed a home with a live external owner")
+        assert not runtime.paths.state_path.exists()
+        assert runtime.stop(timeout_s=2).ok
+        child.wait(timeout=5)
+        assert not runtime.process_is_running(child.pid)
+        with runtime.foreground_instance(options):
+            assert runtime.status().state_path == runtime.paths.state_path
+
+
+def test_upgrade_ignores_unrelated_external_config(external_component, tmp_path):
+    runtime, options, legacy_path = external_component
+    recorded_options = replace(
+        options, config_path=str(tmp_path / "external" / "other.json"),
+    )
+    with live_record(runtime, recorded_options, legacy_path) as child:
+        assert not runtime.status().running
+        assert not runtime.stop(timeout_s=1).ok
+        with runtime.foreground_instance(options):
+            assert runtime.status().state_path == runtime.paths.state_path
+        assert child.poll() is None
+        assert legacy_path.exists()
+
+
+@pytest.mark.parametrize("component", ["gateway"], indirect=True)
+def test_upgrade_ignores_external_gateway_for_another_home(external_component, tmp_path):
+    runtime, options, legacy_path = external_component
+    command = ["python", "-m", "nanobot", "--home", str(tmp_path / "other"), "gateway"]
+    with live_record(runtime, options, legacy_path, command=command) as child:
+        assert not runtime.status().running
+        assert not runtime.stop(timeout_s=1).ok
+        with runtime.foreground_instance(options):
+            assert runtime.status().state_path == runtime.paths.state_path
+        assert child.poll() is None
+        assert legacy_path.exists()
+
+
+def test_upgrade_blocks_external_record_without_home_evidence(external_component):
+    runtime, options, legacy_path = external_component
+    with live_record(runtime, options, legacy_path) as child:
+        for operation in (runtime.status, runtime.stop, lambda: runtime.start_background(options)):
+            with pytest.raises(RuntimeOwnershipConflictError) as conflict:
+                operation()
+            assert "does not identify its home" in str(conflict.value)
+            assert str(legacy_path) in str(conflict.value)
+            assert str(child.pid) in str(conflict.value)
+        with pytest.raises(RuntimeOwnershipConflictError):
+            with runtime.foreground_instance(options):
+                pytest.fail("claimed a home with an ambiguous external owner")
+        assert child.poll() is None
+        assert legacy_path.exists()
+        assert not runtime.paths.state_path.exists()
+
+
+def test_canonical_owner_remains_manageable_with_invalid_external_config(external_component):
+    runtime, options, _ = external_component
+    config = runtime.paths.legacy_config_path
+    config.parent.mkdir(parents=True)
+    config.write_text("{invalid json", encoding="utf-8")
+    with live_record(runtime, options, runtime.paths.state_path) as child:
+        assert runtime.status().pid == child.pid
+        assert runtime.stop(timeout_s=2).ok
+        child.wait(timeout=5)
+
+
+def test_canonical_owner_is_authoritative_over_ambiguous_external_record(external_component):
+    runtime, options, legacy_path = external_component
+    with live_record(runtime, options, legacy_path) as ambiguous:
+        with live_record(runtime, options, runtime.paths.state_path) as canonical:
+            status = runtime.status()
+            assert status.pid == canonical.pid
+            assert status.state_path == runtime.paths.state_path
+            assert not runtime.start_background(options).ok
+            result = runtime.stop(timeout_s=2)
+            assert result.ok and not result.status.running
+            canonical.wait(timeout=5)
+            assert ambiguous.poll() is None
+            assert legacy_path.exists()
+        with pytest.raises(RuntimeOwnershipConflictError):
+            runtime.start_background(options)
+
+
+@pytest.mark.parametrize("component", ["gateway"], indirect=True)
+def test_canonical_owner_conflicts_with_proven_external_owner(external_component):
+    runtime, options, legacy_path = external_component
+    command = ["python", "-m", "nanobot", "--home", options.home, "gateway"]
+    with live_record(runtime, options, legacy_path, command=command) as legacy:
+        with live_record(runtime, options, runtime.paths.state_path) as canonical:
+            for operation in (runtime.status, runtime.stop):
+                with pytest.raises(RuntimeOwnershipConflictError):
+                    operation()
+            assert canonical.poll() is None
+            assert legacy.poll() is None

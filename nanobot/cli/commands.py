@@ -384,7 +384,9 @@ def serve(
     host = host if host is not None else api_cfg.host
     port = port if port is not None else api_cfg.port
     timeout = timeout if timeout is not None else api_cfg.timeout
-    runtime = ApiRuntime(paths=api_runtime_paths(runtime_config.instance_home))
+    runtime = ApiRuntime(paths=api_runtime_paths(
+        runtime_config.instance_home, config_path=runtime_config.source_path,
+    ))
     options = ApiStartOptions(
         home=str(runtime_config.instance_home),
         config_path=str(runtime_config.source_path),

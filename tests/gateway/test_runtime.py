@@ -163,7 +163,8 @@ def test_home_owns_one_gateway_component_across_selectors(tmp_path):
         home=tmp_path / "other", config_path=tmp_path / "first.json",
     )
 
-    assert first.paths == second.paths
+    assert first.paths.state_path == second.paths.state_path
+    assert first.paths.log_path == second.paths.log_path
     assert first.paths.state_path == home / "run" / "gateway.json"
     assert first.paths.log_path == home / "logs" / "gateway.log"
     assert first.paths != other.paths
