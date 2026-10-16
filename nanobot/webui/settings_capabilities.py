@@ -21,6 +21,7 @@ from nanobot.optional_features import (
     extra_installed,
     optional_dependency_groups,
 )
+from nanobot.process_runtime import RuntimeOwnershipConflictError
 from nanobot.providers.image_generation import (
     get_image_gen_provider,
     image_gen_provider_names,
@@ -676,9 +677,12 @@ class CapabilitySettingsHandler:
         operations: CapabilitySettingsOperations,
     ) -> SettingsRouteResult:
         if action == "api-status":
-            return SettingsRouteResult.success(
-                api_service_payload(self.settings, operations.api_runtime())
-            )
+            try:
+                return SettingsRouteResult.success(
+                    api_service_payload(self.settings, operations.api_runtime())
+                )
+            except RuntimeOwnershipConflictError as exc:
+                return SettingsRouteResult.failure(409, str(exc))
         if action == "api-start":
             return await self._start_api(request, operations)
         if action == "api-stop":
@@ -818,6 +822,8 @@ class CapabilitySettingsHandler:
                     500,
                     api_runtime_message(result.message),
                 )
+        except RuntimeOwnershipConflictError as exc:
+            return SettingsRouteResult.failure(409, str(exc))
         except (WebUISettingsError, OptionalFeatureError) as exc:
             return SettingsRouteResult.failure(
                 getattr(exc, "status", 400),
@@ -841,6 +847,8 @@ class CapabilitySettingsHandler:
         runtime = operations.api_runtime()
         try:
             result = await asyncio.to_thread(runtime.stop)
+        except RuntimeOwnershipConflictError as exc:
+            return SettingsRouteResult.failure(409, str(exc))
         except Exception as exc:
             self.logger.exception("failed to stop managed API service")
             return SettingsRouteResult.failure(500, str(exc))

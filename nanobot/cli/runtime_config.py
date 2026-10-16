@@ -136,7 +136,7 @@ def _load_runtime_config(config: str | None = None, workspace: str | None = None
             console.print(f"[red]Error: Config file not found: {config_path}[/red]")
             raise typer.Exit(1)
         set_config_path(config_path)
-        console.print(f"[dim]Using config: {config_path}[/dim]")
+        console.print(Text(f"Using config: {config_path}", style="dim"), soft_wrap=True)
 
     loaded = _load_config_for_cli(config_path, resolve_env=True)
     if workspace is not None:
@@ -155,9 +155,9 @@ def _validate_session_storage(config: Config, *, workspace_override: str | None 
     source = "--workspace" if workspace_override else "agents.defaults.workspace"
     console.print(Text("Cannot start: chat history must be outside the workspace.", style="red"))
     console.print()
-    console.print(Text(f"Workspace ({source}): {workspace}"))
-    console.print(Text(f"Config: {config.source_path}"))
-    console.print(Text(f"Chat history: {sessions}"))
+    console.print(Text(f"Workspace ({source}): {workspace}"), soft_wrap=True)
+    console.print(Text(f"Config: {config.source_path}"), soft_wrap=True)
+    console.print(Text(f"Chat history: {sessions}"), soft_wrap=True)
     console.print()
     console.print("To fix, keep the workspace in place:")
     console.print("  1. Stop the instance and back up its files.")

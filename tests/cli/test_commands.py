@@ -2839,6 +2839,38 @@ def test_webui_rejects_active_home_with_different_paths_before_writing(
     assert not requested_workspace.exists()
 
 
+@pytest.mark.parametrize("command", [
+    ["gateway", "status"], ["gateway", "stop"], ["gateway", "--background"],
+    ["gateway", "restart"], ["webui", "--yes", "--no-open"], ["serve"],
+])
+def test_cli_reports_conflicting_runtime_owners_cleanly(monkeypatch, tmp_path, command):
+    from nanobot.api.runtime import ApiRuntime
+    from nanobot.gateway import GatewayRuntime
+    from nanobot.process_runtime import ProcessStatus, RuntimeOwnershipConflictError
+
+    config_file = tmp_path / "config.json"
+    config_file.write_text("{}")
+    statuses = [ProcessStatus(
+        running=True, pid=pid, state_path=tmp_path / f"owner-{pid}.json",
+        log_path=tmp_path / "runtime.log",
+    ) for pid in (1001, 1002)]
+    service = "api" if command == ["serve"] else "gateway"
+
+    def conflicting_status(_runtime):
+        raise RuntimeOwnershipConflictError(service, statuses)
+
+    _patch_webui_provider_ready(monkeypatch)
+    monkeypatch.setattr(GatewayRuntime, "status", conflicting_status)
+    monkeypatch.setattr(ApiRuntime, "status", conflicting_status)
+    result = runner.invoke(app, [*command, "--config", str(config_file)])
+
+    assert result.exit_code == 1, result.output
+    assert f"Multiple live {service} processes" in result.output
+    assert "PID 1001" in result.output
+    assert "PID 1002" in result.output
+    assert "Traceback" not in result.output
+
+
 def test_attach_to_background_gateway_detaches_on_ctrl_c(capsys, tmp_path: Path) -> None:
     stopped = False
     log_path = tmp_path / "gateway.log"

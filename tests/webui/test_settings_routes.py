@@ -14,7 +14,7 @@ from websockets.datastructures import Headers
 
 from nanobot.api.runtime import ApiRuntime
 from nanobot.config.loader import get_config_path
-from nanobot.process_runtime import ProcessStatus
+from nanobot.process_runtime import ProcessStatus, RuntimeOwnershipConflictError
 from nanobot.webui.http_utils import http_json_response
 from nanobot.webui.mcp_presets_api import custom_mcp_action
 from nanobot.webui.settings_routes import WebUISettingsRouter
@@ -87,6 +87,34 @@ async def test_api_start_rejects_selector_conflict_before_config_mutation(
 
     assert response.status_code == 409
     assert "active.json" in json.loads(response.body)["error"]
+    assert not config_path.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["", "/start", "/stop"])
+async def test_api_routes_report_conflicting_owners_without_mutating_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, action: str,
+) -> None:
+    config_path = tmp_path / "config.json"
+    statuses = [ProcessStatus(
+        running=True, pid=pid, state_path=tmp_path / f"api-{pid}.json",
+        log_path=tmp_path / "api.log",
+    ) for pid in (1001, 1002)]
+
+    def conflict(*_args, **_kwargs):
+        raise RuntimeOwnershipConflictError("api", statuses)
+
+    runtime = SimpleNamespace(status=conflict, stop=conflict)
+    monkeypatch.setattr(WebUISettingsRouter, "_api_runtime", lambda _self: runtime)
+    path = f"/api/settings/api-service{action}"
+    request = _mutation_request(path, {}) if action else SimpleNamespace(path=path, headers=Headers())
+
+    response = await _router(config_path=config_path).dispatch(None, request, path)
+
+    assert response.status_code == 409
+    message = json.loads(response.body)["error"]
+    assert "Multiple live api processes" in message
+    assert "PID 1001" in message and "PID 1002" in message
     assert not config_path.exists()
 
 

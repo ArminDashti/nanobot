@@ -66,6 +66,7 @@ from nanobot.cli.webui_support import (  # noqa: E402
 )
 from nanobot.config.paths import get_workspace_path  # noqa: E402
 from nanobot.config.schema import Config  # noqa: E402
+from nanobot.process_runtime import RuntimeOwnershipConflictError  # noqa: E402
 from nanobot.security.network import is_loopback_host  # noqa: E402
 from nanobot.utils.helpers import sanitize_surrogates as _sanitize_surrogates  # noqa: E402,F401
 from nanobot.utils.helpers import (  # noqa: E402
@@ -82,6 +83,13 @@ class _DesktopAwareGroup(TyperGroup):
         # must bypass the picker. Also covers older commands:app launchers.
         ctx.meta["desktop_target_args"] = list(args)
         return super().parse_args(ctx, args)
+
+    def invoke(self, ctx: Any) -> Any:
+        try:
+            return super().invoke(ctx)
+        except RuntimeOwnershipConflictError as exc:
+            console.print(Text(str(exc), style="red"))
+            raise typer.Exit(1) from exc
 
 
 app = typer.Typer(
@@ -388,6 +396,8 @@ def serve(
     try:
         with runtime.foreground_instance(options):
             _run_api_server(runtime_config, host=host, port=port, timeout=timeout, verbose=verbose)
+    except RuntimeOwnershipConflictError:
+        raise
     except RuntimeError as exc:
         console.print(Text(f"API cannot start: {exc}", style="red"))
         status = runtime.status()

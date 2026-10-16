@@ -28,7 +28,7 @@ from nanobot.cli.webui_support import (
 )
 from nanobot.config.paths import get_data_dir
 from nanobot.config.schema import Config
-from nanobot.process_runtime import process_selectors_mismatch
+from nanobot.process_runtime import RuntimeOwnershipConflictError, process_selectors_mismatch
 from nanobot.webui.session_identity import is_webui_session_key, webui_chat_id
 
 if TYPE_CHECKING:
@@ -512,6 +512,9 @@ def _ensure_gateway(
         if not wait_until_ready:
             return _GatewayHandle(base_url=base_url, lease=lease)
         return wait_for_ready(result.status.log_path)
+    except RuntimeOwnershipConflictError as exc:
+        lease.release(wait_for_stop=False)
+        raise TuiUnavailableError(str(exc)) from exc
     except BaseException:
         lease.release(timeout_s=5)
         raise
