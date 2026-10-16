@@ -326,7 +326,7 @@ class ManagedProcessRuntime(Generic[_StartOptionsT]):
             ),
             config_path=_as_str(state.get("config_path")),
             workspace=_as_str(state.get("workspace")),
-            home=_recorded_home(state),
+            home=_as_str(state.get("home")),
         )
 
     def _runtime_identity_match(

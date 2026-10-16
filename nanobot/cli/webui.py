@@ -70,7 +70,7 @@ def webui(
         "--gateway-port",
         help="Gateway health port",
     ),
-    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Agent workspace directory"),
     config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
     background: bool = typer.Option(
         False,

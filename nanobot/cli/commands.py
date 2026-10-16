@@ -166,7 +166,7 @@ def main(
 
 @app.command()
 def onboard(
-    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Agent workspace directory"),
     config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
     wizard: bool = typer.Option(False, "--wizard", help="Use interactive wizard"),
     non_interactive_refresh: bool = typer.Option(False, "--refresh", help="Refresh config, preserving existing settings without prompting"),
@@ -337,7 +337,7 @@ def _read_trigger_cli_message(message: str | None) -> str:
 def trigger(
     trigger_id: str = typer.Argument(..., help="Trigger ID returned by /trigger"),
     message: str | None = typer.Argument(None, help="Message to deliver; stdin is used when omitted"),
-    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Agent workspace directory"),
     config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
 ):
     """Deliver a local trigger message to its bound chat session."""
@@ -373,7 +373,7 @@ def serve(
     host: str | None = typer.Option(None, "--host", "-H", help="Bind address"),
     timeout: float | None = typer.Option(None, "--timeout", "-t", help="Per-request timeout (seconds)"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show nanobot runtime logs"),
-    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Agent workspace directory"),
     config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
 ):
     """Start the OpenAI-compatible API server (/v1/chat/completions)."""
@@ -682,7 +682,7 @@ app.command()(paths)
 @app.command()
 def status(
     config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
-    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Agent workspace directory"),
 ):
     """Show nanobot status."""
     config_path, loaded = _load_inspection_config(config=config, workspace=workspace)

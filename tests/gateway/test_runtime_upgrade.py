@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from contextlib import contextmanager
@@ -144,7 +145,11 @@ def test_upgrade_keeps_unverifiable_live_owner_without_signalling(component):
         assert legacy_path.exists()
 
 
-def test_upgrade_reads_and_follows_selected_owners_rotated_logs(component, monkeypatch, capsys):
+@pytest.mark.parametrize("rotate", [
+    False,
+    pytest.param(True, marks=pytest.mark.skipif(os.name == "nt", reason="Windows readers prevent log rename")),
+])
+def test_upgrade_reads_and_follows_selected_owners_logs(component, monkeypatch, capsys, rotate):
     runtime, options, legacy_path = component
     with live_record(runtime, options, legacy_path):
         log_path = runtime.status().log_path
@@ -159,14 +164,16 @@ def test_upgrade_reads_and_follows_selected_owners_rotated_logs(component, monke
             nonlocal rotated
             if rotated:
                 raise KeyboardInterrupt
-            log_path.replace(backup)
-            log_path.write_text("after-rotation\n", encoding="utf-8")
+            if rotate:
+                log_path.replace(backup)
+            with log_path.open("w" if rotate else "a", encoding="utf-8") as stream:
+                stream.write("new-output\n")
             rotated = True
 
         monkeypatch.setattr(runtime, "_sleep", rotate_then_interrupt)
         assert runtime.follow_logs(tail=2) == 130
 
-    assert capsys.readouterr().out.splitlines() == ["older", "current", "after-rotation"]
+    assert capsys.readouterr().out.splitlines() == ["older", "current", "new-output"]
     assert not runtime.paths.log_path.exists()
 
 
@@ -199,7 +206,8 @@ def test_upgrade_manages_external_gateway_owner(tmp_path):
 
         status = runtime.status()
         assert status.pid == child.pid and status.state_path == legacy_path
-        assert status.home == str(tmp_path)
+        assert status.home is None
+        assert runtime.selectors_mismatch(status, options)
         assert status.log_path == log_path
         assert runtime.read_log_tail() == ["external owner"]
         assert not runtime.start_background(options).ok
