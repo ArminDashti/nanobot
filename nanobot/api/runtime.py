@@ -52,13 +52,13 @@ class ApiRuntime(ManagedProcessRuntime[ApiStartOptions]):
             current = self.status()
             if current.running and self.selectors_mismatch(current, options):
                 raise RuntimeError("api_instance_mismatch")
-            if current.running and current.pid != pid:
+            current_state = self._read_state() or {}
+            pid_handoff = self._pending_parent_pid_handoff(current, current_state)
+            if current.running and current.pid != pid and not pid_handoff:
                 raise RuntimeError("api_already_running")
-            current_state = self._read_state()
             launch_mode = (
                 "background"
                 if current.running
-                and current_state
                 and current_state.get("launch_mode") == "background"
                 else "foreground"
             )

@@ -264,15 +264,7 @@ class GatewayRuntime(ManagedProcessRuntime[GatewayStartOptions]):
                 return self._start_background(options)
 
     def _start_background(self, options: GatewayStartOptions) -> RuntimeResult:
-        result = super()._start_background(options)
-        if not result.ok:
-            return self._result(result)
-        state = self._read_state()
-        if state and result.status.pid == state.get("pid"):
-            state["launch_mode"] = "background"
-            state["pending_pid_handoff"] = True
-            self._write_state(state)
-        return RuntimeResult(True, result.message, self.status())
+        return self._result(super()._start_background(options))
 
     def stop(self, *, timeout_s: int = 20) -> RuntimeResult:
         """Stop the gateway recorded by this runtime."""
@@ -351,15 +343,7 @@ class GatewayRuntime(ManagedProcessRuntime[GatewayStartOptions]):
             with self._transition_lock(), self._lifecycle_lock():
                 current = self.status()
                 state = self._read_state() or {}
-                pid_handoff = (
-                    self.platform_name == "Windows"
-                    and current.running
-                    and current.pid != pid
-                    and current.pid == os.getppid()
-                    and state.get("pid") == current.pid
-                    and state.get("launch_mode") == "background"
-                    and state.get("pending_pid_handoff") is True
-                )
+                pid_handoff = self._pending_parent_pid_handoff(current, state)
                 if current.running and current.pid != pid and not pid_handoff:
                     raise GatewayAlreadyRunningError(current)
                 if current.running and self.selectors_mismatch(current, options):

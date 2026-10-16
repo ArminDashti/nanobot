@@ -181,6 +181,7 @@ class ManagedProcessRuntime(Generic[_StartOptionsT]):
             "command": command,
             "log_path": str(self.paths.log_path),
             "launch_mode": "background",
+            "pending_pid_handoff": True,
         }
         state.update(self.process_identity_record(pid))
         self._write_state(state)
@@ -341,6 +342,20 @@ class ManagedProcessRuntime(Generic[_StartOptionsT]):
     @staticmethod
     def selectors_mismatch(status: ProcessStatus, options: ProcessStartOptions) -> bool:
         return process_selectors_mismatch(status, options)
+
+    def _pending_parent_pid_handoff(
+        self, current: ProcessStatus, state: dict[str, Any],
+    ) -> bool:
+        """Allow a managed Windows launcher to yield its recorded PID to its child."""
+        return (
+            self.platform_name == "Windows"
+            and current.running
+            and current.pid != os.getpid()
+            and current.pid == os.getppid()
+            and state.get("pid") == current.pid
+            and state.get("launch_mode") == "background"
+            and state.get("pending_pid_handoff") is True
+        )
 
     def read_log_tail(self, *, tail: int = 200) -> list[str]:
         """Return the last ``tail`` log lines."""
