@@ -140,3 +140,29 @@ def test_upgrade_keeps_unverifiable_live_owner_without_signalling(component):
         assert not runtime.start_background(options).ok
         assert child.poll() is None
         assert legacy_path.exists()
+
+
+def test_upgrade_reads_and_follows_selected_owners_rotated_logs(component, monkeypatch, capsys):
+    runtime, options, legacy_path = component
+    with live_record(runtime, options, legacy_path):
+        log_path = runtime.status().log_path
+        log_path.parent.mkdir(parents=True)
+        backup = log_path.with_name(f"{log_path.name}.1")
+        backup.write_text("older\n", encoding="utf-8")
+        log_path.write_text("current\n", encoding="utf-8")
+        assert runtime.read_log_tail(tail=2) == ["older", "current"]
+        rotated = False
+
+        def rotate_then_interrupt(_seconds):
+            nonlocal rotated
+            if rotated:
+                raise KeyboardInterrupt
+            log_path.replace(backup)
+            log_path.write_text("after-rotation\n", encoding="utf-8")
+            rotated = True
+
+        monkeypatch.setattr(runtime, "_sleep", rotate_then_interrupt)
+        assert runtime.follow_logs(tail=2) == 130
+
+    assert capsys.readouterr().out.splitlines() == ["older", "current", "after-rotation"]
+    assert not runtime.paths.log_path.exists()

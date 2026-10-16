@@ -303,13 +303,16 @@ class ManagedProcessRuntime(Generic[_StartOptionsT]):
 
     def read_log_tail(self, *, tail: int = 200) -> list[str]:
         """Return the last ``tail`` log lines."""
-        if tail <= 0 or not self.paths.log_path.exists():
+        if tail <= 0:
+            return []
+        log_path = self.status().log_path
+        if not log_path.exists():
             return []
         lines: list[str] = []
         paths = [
-            self.paths.log_path,
+            log_path,
             *(
-                self.paths.log_path.with_name(f"{self.paths.log_path.name}.{index}")
+                log_path.with_name(f"{log_path.name}.{index}")
                 for index in range(1, DEFAULT_BACKUP_COUNT + 1)
             ),
         ]
@@ -325,11 +328,12 @@ class ManagedProcessRuntime(Generic[_StartOptionsT]):
 
     def follow_logs(self, *, tail: int = 200) -> int:
         """Print existing log lines and follow new output."""
+        log_path = self.status().log_path
         for line in self.read_log_tail(tail=tail):
             print(line)
-        self.paths.logs_dir.mkdir(parents=True, exist_ok=True)
-        self.paths.log_path.touch(exist_ok=True)
-        handle = self.paths.log_path.open("r", encoding="utf-8", errors="replace")
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.touch(exist_ok=True)
+        handle = log_path.open("r", encoding="utf-8", errors="replace")
         try:
             try:
                 handle.seek(0, os.SEEK_END)
@@ -337,9 +341,9 @@ class ManagedProcessRuntime(Generic[_StartOptionsT]):
                     line = handle.readline()
                     if line:
                         print(line.rstrip("\n"))
-                    elif self._log_file_replaced(handle):
+                    elif self._log_file_replaced(handle, log_path):
                         handle.close()
-                        handle = self.paths.log_path.open(
+                        handle = log_path.open(
                             "r", encoding="utf-8", errors="replace"
                         )
                     else:
@@ -349,11 +353,11 @@ class ManagedProcessRuntime(Generic[_StartOptionsT]):
         finally:
             handle.close()
 
-    def _log_file_replaced(self, handle: Any) -> bool:
+    def _log_file_replaced(self, handle: Any, log_path: Path) -> bool:
         """Return whether rotation replaced or truncated the followed log file."""
         try:
             opened = os.fstat(handle.fileno())
-            current = self.paths.log_path.stat()
+            current = log_path.stat()
             same_file = (opened.st_dev, opened.st_ino) == (current.st_dev, current.st_ino)
             return not same_file or current.st_size < handle.tell()
         except OSError:
