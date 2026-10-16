@@ -12,6 +12,7 @@ import typer
 from loguru import logger
 from rich.console import Console
 
+from nanobot.config.home import get_instance_paths, get_selected_home_path
 from nanobot.config.schema import Config
 from nanobot.gateway import (
     GatewayAlreadyRunningError,
@@ -84,6 +85,7 @@ def create_gateway_app(
         return GatewayInstance.resolve(
             config_path=_resolved_config_selector(config),
             workspace=workspace,
+            home=get_instance_paths().home if config is None else get_selected_home_path(),
         )
 
     def runtime_for_instance(

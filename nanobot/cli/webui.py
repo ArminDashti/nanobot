@@ -1,7 +1,5 @@
 """WebUI CLI command."""
 
-from pathlib import Path
-
 import typer
 from pydantic import ValidationError
 from rich.console import Console
@@ -105,19 +103,19 @@ def webui(
     if background:
         import shlex
 
-        command = ["nanobot", "gateway", "--background", "--config", str(config_path)]
-        if workspace:
-            command.extend(
-                ["--workspace", str(Path(workspace).expanduser().resolve(strict=False))]
-            )
+        from nanobot.config.home import get_instance_paths
+
+        prefix = ["nanobot", "--home", str(get_instance_paths().home)]
+        selectors = ["--config", str(config_path)]
+        if workspace is not None:
+            selectors.extend(["--workspace", _resolve_workspace_override(workspace)])
+        command = [*prefix, "gateway", "--background", *selectors]
         console.print(
             "[red]`nanobot webui --background` no longer owns gateway lifecycle.[/red]"
         )
         console.print("Start the persistent gateway explicitly, then open the WebUI:")
-        console.print("  [cyan]" + " ".join(shlex.quote(part) for part in command) + "[/cyan]")
-        console.print(
-            "  [cyan]nanobot webui --config " + shlex.quote(str(config_path)) + "[/cyan]"
-        )
+        console.print("  " + shlex.join(command), style="cyan", markup=False, soft_wrap=True)
+        console.print("  " + shlex.join([*prefix, "webui", *selectors]), style="cyan", markup=False, soft_wrap=True)
         raise typer.Exit(1)
     created_config = not config_path.exists()
     if created_config:

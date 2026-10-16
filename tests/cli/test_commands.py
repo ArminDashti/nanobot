@@ -1,6 +1,7 @@
 import asyncio
 import json
 import re
+import shlex
 import shutil
 import signal
 import urllib.error
@@ -2343,15 +2344,19 @@ def test_webui_not_ready_does_not_print_a_login_link(monkeypatch, tmp_path: Path
     assert "bootstrapSecret=" not in result.stdout
 
 
+@pytest.mark.parametrize("explicit_home", [False, True])
 def test_webui_background_points_to_the_single_persistent_gateway_command(
     tmp_path: Path,
+    explicit_home: bool,
 ) -> None:
     config_file = tmp_path / "config.json"
     workspace = tmp_path / "workspace"
+    home = tmp_path / "instance [home]" if explicit_home else tmp_path
 
     result = runner.invoke(
         app,
         [
+            *(["--home", str(home)] if explicit_home else []),
             "webui",
             "--background",
             "--config",
@@ -2364,8 +2369,13 @@ def test_webui_background_points_to_the_single_persistent_gateway_command(
     assert result.exit_code == 1
     compact_output = _strip_ansi(result.stdout).replace("\n", " ")
     assert "webui --background` no longer owns gateway lifecycle" in compact_output
-    assert "nanobot gateway --background --config" in compact_output
-    assert "--workspace" in compact_output
+    commands = [shlex.split(line.strip()) for line in result.stdout.splitlines() if line.strip().startswith("nanobot ")]
+    prefix = ["nanobot", "--home", str(home)]
+    selectors = ["--config", str(config_file), "--workspace", str(workspace)]
+    assert commands == [
+        [*prefix, "gateway", "--background", *selectors],
+        [*prefix, "webui", *selectors],
+    ]
     assert not config_file.exists()
 
 

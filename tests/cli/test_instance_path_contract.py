@@ -128,3 +128,35 @@ def test_implicit_config_symlink_keeps_default_home(tmp_path, create_symlink):
     assert data["home"] == str(home)
     assert data["config"] == str(config)
     assert data["workspace"] == str(home / "workspace")
+
+
+@pytest.mark.parametrize("command", ["status", "logs"])
+def test_gateway_inspection_keeps_default_home_when_config_is_a_symlink(tmp_path, monkeypatch, command):
+    from nanobot.gateway import GatewayInstance, GatewayRuntime
+
+    user_home = tmp_path / "user"
+    home = user_home / ".nanobot"
+    home.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(user_home))
+    monkeypatch.setenv("USERPROFILE", str(user_home))
+    external_config = tmp_path / "external.json"
+    external_config.write_text("invalid config; inspection must not load it", encoding="utf-8")
+    try:
+        (home / "config.json").symlink_to(external_config)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    instance = GatewayInstance.resolve(
+        home=home, config_path=external_config, workspace=str(home / "workspace"),
+    )
+    runtime = GatewayRuntime(paths=instance.paths)
+    runtime.paths.logs_dir.mkdir()
+    runtime.paths.log_path.write_text("default-home-log-marker\n", encoding="utf-8")
+    with runtime.foreground_instance(instance.start_options(port=18790)):
+        args = ["gateway", command]
+        if command == "logs":
+            args.append("--no-follow")
+        result = CliRunner().invoke(app, args)
+
+    assert result.exit_code == 0, result.output
+    expected = "Running:yes" if command == "status" else "default-home-log-marker"
+    assert expected in "".join(result.output.split())
