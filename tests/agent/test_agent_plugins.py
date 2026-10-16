@@ -34,7 +34,7 @@ from nanobot.session.manager import SessionManager
 @pytest.fixture(autouse=True)
 def _isolate_plugin_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        agent_plugins, "get_config_path", lambda: tmp_path / "config" / "config.json"
+        agent_plugins, "get_home_path", lambda: tmp_path / "config"
     )
 
 
@@ -480,7 +480,7 @@ async def test_project_reads_do_not_rescan_cached_plugin_packages(
     assert fingerprint_checks == 1
 
 
-def test_plugin_state_symlink_cannot_escape_config_root(
+def test_plugin_state_symlink_cannot_escape_home(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config = tmp_path / "config"
@@ -491,7 +491,7 @@ def test_plugin_state_symlink_cannot_escape_config_root(
         (config / "plugin-data").symlink_to(outside, target_is_directory=True)
     except OSError as exc:
         pytest.skip(f"directory symlink unavailable: {exc}")
-    monkeypatch.setattr(agent_plugins, "get_config_path", lambda: config / "config.json")
+    monkeypatch.setattr(agent_plugins, "get_home_path", lambda: config)
     _plugin(tmp_path, "desktop")
 
     with pytest.raises(RuntimeError, match="escapes its parent"):

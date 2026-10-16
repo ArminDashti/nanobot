@@ -14,7 +14,7 @@ from loguru import logger
 from pydantic import ValidationError
 
 from nanobot.agent.skill_metadata import parse_skill_metadata, valid_skill_metadata
-from nanobot.config.loader import get_config_path
+from nanobot.config.home import get_home_path
 from nanobot.config.schema import MCPServerConfig
 
 AGENT_PLUGIN_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
@@ -178,7 +178,7 @@ def enabled_agent_plugin_skill_dirs(
 def _skill_cache_key(workspace: Path) -> tuple[Path, Path]:
     return (
         workspace.expanduser().resolve(),
-        get_config_path().expanduser().resolve(),
+        get_home_path(),
     )
 
 
@@ -431,7 +431,7 @@ def _expand(value: str, root: Path, data: Path) -> str:
 
 def _plugin_data_dir(workspace: Path, name: str, *, create: bool) -> Path:
     workspace_id = sha256(str(workspace.expanduser().resolve()).encode()).hexdigest()[:12]
-    current = get_config_path().expanduser().resolve().parent
+    current = get_home_path()
     for segment in ("plugin-data", workspace_id, name):
         path = current / segment
         if create:

@@ -399,7 +399,7 @@ class GatewayHTTPHandler:
         from nanobot.webui.remote_instances import RemoteInstances
 
         self.remote_instances = RemoteInstances(
-            settings.config.path.parent / "webui", local_gateway_id=tokens.instance_id,
+            settings.config.instance_home / "webui", local_gateway_id=tokens.instance_id,
         )
         self.skills_workspace_path = skills_workspace_path
         self.disabled_skills: set[str] = (

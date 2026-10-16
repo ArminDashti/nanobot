@@ -83,7 +83,7 @@ def test_skill_payload_verifies_plugins_once_per_request(
     monkeypatch: pytest.MonkeyPatch,
     detail: bool,
 ) -> None:
-    monkeypatch.setattr(agent_plugins, "get_config_path", lambda: tmp_path / "config.json")
+    monkeypatch.setattr(agent_plugins, "get_home_path", lambda: tmp_path)
     workspace_skill = _write_skill(tmp_path, "custom-skill") / "SKILL.md"
     plugin = tmp_path / "plugins" / "demo"
     _write_skill(plugin, "plugin-skill")
