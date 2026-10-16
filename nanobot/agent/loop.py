@@ -381,7 +381,9 @@ class AgentLoop:
         self._extra_hooks: list[AgentHook] = hooks or []
         self._hook_factories: list[AgentTurnHookFactory] = hook_factories or []
 
-        self.context = ContextBuilder(workspace, timezone=timezone, disabled_skills=disabled_skills)
+        self.context = ContextBuilder(
+            workspace, timezone=timezone, disabled_skills=disabled_skills, home=self.instance_home,
+        )
         self.sessions = session_manager or SessionManager(
             workspace, sessions_root=self.instance_home / "sessions",
         )

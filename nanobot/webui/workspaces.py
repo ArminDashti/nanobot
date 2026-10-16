@@ -79,13 +79,13 @@ def normalize_webui_workspace_state(raw: Any) -> dict[str, Any]:
     return state
 
 
-def remember_webui_project(path: Path) -> None:
-    state = read_webui_workspace_state()
+def remember_webui_project(path: Path, *, home: Path | None = None) -> None:
+    state = read_webui_workspace_state(home=home)
     recent = [str(path), *(item for item in state["recent_projects"] if item != str(path))][:20]
     if recent != state["recent_projects"]:
         state["recent_projects"] = recent
         try:
-            write_webui_workspace_state(state)
+            write_webui_workspace_state(state, home=home)
         except OSError:
             logger.exception("failed to save recent WebUI projects")
 
@@ -160,8 +160,10 @@ def write_webui_default_access_mode(mode: str, *, home: Path | None = None) -> b
 def default_scope_for_webui(
     default_workspace: Path,
     default_restrict_to_workspace: bool,
+    *,
+    home: Path | None = None,
 ) -> WorkspaceScope:
-    mode = read_webui_default_access_mode()
+    mode = read_webui_default_access_mode(home=home)
     if mode == "default":
         return default_workspace_scope(
             default_workspace,
@@ -176,8 +178,9 @@ def workspaces_payload(
     default_workspace: Path,
     default_restrict_to_workspace: bool,
     can_change_project: bool,
+    home: Path | None = None,
 ) -> dict[str, Any]:
-    state = read_webui_workspace_state()
+    state = read_webui_workspace_state(home=home)
     default_access_mode = state["default_access_mode"]
     default_scope = (
         default_workspace_scope(
@@ -219,7 +222,9 @@ class WebUIWorkspaceController:
         session_manager: SessionManager | None,
         default_workspace: Path,
         default_restrict_to_workspace: bool,
+        home: Path | None = None,
     ) -> None:
+        self._home = home
         self._sessions = session_manager
         self._default_workspace = default_workspace
         self._default_restrict_to_workspace = default_restrict_to_workspace
@@ -229,6 +234,7 @@ class WebUIWorkspaceController:
         return default_scope_for_webui(
             self._default_workspace,
             self._default_restrict_to_workspace,
+            home=self._home,
         )
 
     def automation_scope(
@@ -319,6 +325,7 @@ class WebUIWorkspaceController:
             default_workspace=self._default_workspace,
             default_restrict_to_workspace=self._default_restrict_to_workspace,
             can_change_project=can_change_project,
+            home=self._home,
         )
 
     def resolve_project(self, path: object) -> dict[str, str]:
@@ -331,7 +338,7 @@ class WebUIWorkspaceController:
             default_restrict_to_workspace=self._default_restrict_to_workspace,
             source_channel=_WEBUI_SCOPE_CHANNEL,
         )
-        remember_webui_project(scope.project_path)
+        remember_webui_project(scope.project_path, home=self._home)
         return {"path": str(scope.project_path), "name": scope.project_name}
 
     def set_favorite_project(self, path: object, pinned: object) -> list[dict[str, str]]:
@@ -349,17 +356,17 @@ class WebUIWorkspaceController:
                 source_channel=_WEBUI_SCOPE_CHANNEL,
             )
             path = str(scope.project_path)
-        state = read_webui_workspace_state()
+        state = read_webui_workspace_state(home=self._home)
         favorites: list[str] = state["favorite_projects"]
         existing = next((item for item in favorites if os.path.normcase(item) == os.path.normcase(path)), None)
         if pinned and existing is None:
             if len(favorites) >= 40:
                 raise WorkspaceScopeError("at most 40 favorite folders can be pinned")
             favorites.append(path)
-            write_webui_workspace_state(state)
+            write_webui_workspace_state(state, home=self._home)
         elif not pinned and existing is not None:
             favorites.remove(existing)
-            write_webui_workspace_state(state)
+            write_webui_workspace_state(state, home=self._home)
         return [{"name": Path(item).name or item, "path": item} for item in favorites]
 
     async def scope_from_envelope(
@@ -459,7 +466,7 @@ class WebUIWorkspaceController:
                 expected_generation=generation,
             )
         self._draft_scopes.pop(session_key, None)
-        remember_webui_project(scope.project_path)
+        remember_webui_project(scope.project_path, home=self._home)
         return generation, created
 
     async def rollback_scope_admission(
@@ -486,7 +493,7 @@ class WebUIWorkspaceController:
         ):
             await self.persist_scope(chat_id, scope)
             return
-        remember_webui_project(scope.project_path)
+        remember_webui_project(scope.project_path, home=self._home)
         self._draft_scopes[session_key] = scope
         self._draft_scopes.move_to_end(session_key)
         while len(self._draft_scopes) > _MAX_DRAFT_SCOPES:

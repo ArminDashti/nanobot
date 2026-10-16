@@ -17,7 +17,6 @@ from nanobot.agent.tools.schema import (
     StringSchema,
     tool_parameters_schema,
 )
-from nanobot.config.paths import get_media_dir
 from nanobot.providers.image_generation import (
     ImageGenerationError,
     ImageGenerationProvider,
@@ -144,7 +143,7 @@ class ImageGenerationTool(Tool):
                 value,
                 workspace=workspace,
                 allowed_root=access.allowed_root,
-                extra_allowed_roots=[get_media_dir()] if access.allowed_root is not None else None,
+                extra_allowed_roots=[self._home / "media"] if access.allowed_root is not None else None,
                 strict=True,
             )
         except WorkspaceBoundaryError as exc:

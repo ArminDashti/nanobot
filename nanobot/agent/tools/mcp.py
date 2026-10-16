@@ -1364,6 +1364,7 @@ def _configured_servers(config: Config) -> dict[str, MCPServerConfig]:
     return agent_plugin_mcp_servers(
         config.workspace_path,
         config.tools.mcp_servers,
+        home=config.instance_home,
     )
 
 

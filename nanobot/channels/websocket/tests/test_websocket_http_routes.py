@@ -800,6 +800,7 @@ async def test_webui_skills_marketplace_routes_search_and_install(
         *,
         provider: str,
         version: str,
+        home: Path,
     ) -> dict[str, Any]:
         assert source == "acme/agent-skills"
         assert skill_id == "react-testing"
@@ -842,7 +843,9 @@ async def test_webui_skills_marketplace_routes_search_and_install(
         )
         assert search_response.status_code == 200
         assert search_response.json()["skills"][0]["skill_id"] == "react-testing"
-        search.assert_awaited_once_with("react", tmp_path, provider="all")
+        search.assert_awaited_once_with(
+            "react", tmp_path, provider="all", home=channel.gateway.settings.config.instance_home,
+        )
 
         trending_response = await _http_get(
             f"http://127.0.0.1:{port}/api/webui/skills/trending",
@@ -850,7 +853,9 @@ async def test_webui_skills_marketplace_routes_search_and_install(
         )
         assert trending_response.status_code == 200
         assert trending_response.json()["period"] == "24h"
-        trending.assert_awaited_once_with(tmp_path, provider="all")
+        trending.assert_awaited_once_with(
+            tmp_path, provider="all", home=channel.gateway.settings.config.instance_home,
+        )
 
         trends_response = await _http_get(
             f"http://127.0.0.1:{port}/api/webui/skills/trends"
@@ -901,6 +906,7 @@ async def test_webui_skill_install_rejects_overlapping_requests(
         *,
         provider: str,
         version: str,
+        home: Path,
     ) -> dict[str, Any]:
         started.set()
         await finish.wait()
@@ -986,6 +992,7 @@ async def test_webui_skill_install_honors_remote_install_opt_in(
         *,
         provider: str,
         version: str,
+        home: Path,
     ) -> dict[str, Any]:
         skill_dir = workspace / "skills" / skill_id
         skill_dir.mkdir(parents=True)

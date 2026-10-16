@@ -587,7 +587,7 @@ def mcp_presets_payload(
     existing_names = {str(row["name"]) for row in (*preset_rows, *custom_rows)}
     plugin_rows = [
         _agent_plugin_payload(plugin)
-        for plugin in discover_agent_plugins(config.workspace_path)
+        for plugin in discover_agent_plugins(config.workspace_path, home=config.instance_home)
         if f"plugin-{plugin.name}" not in existing_names
     ]
     payload: dict[str, Any] = {
@@ -1288,7 +1288,7 @@ async def mcp_presets_settings_action(
     if name.startswith("plugin-"):
         plugin_config = load_config(config_path, home=home)
         plugin_name = name.removeprefix("plugin-")
-        plugins = discover_agent_plugins(plugin_config.workspace_path)
+        plugins = discover_agent_plugins(plugin_config.workspace_path, home=plugin_config.instance_home)
         plugin = next((item for item in plugins if item.name == plugin_name), None)
         if name not in plugin_config.tools.mcp_servers and plugin is not None:
             if action not in {"enable", "disable"}:
@@ -1298,6 +1298,7 @@ async def mcp_presets_settings_action(
                 plugin_config.workspace_path,
                 plugin_name,
                 action == "enable",
+                home=plugin_config.instance_home,
             )
             verb = "enabled" if action == "enable" else "disabled"
             payload = mcp_presets_payload(

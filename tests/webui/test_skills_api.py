@@ -120,7 +120,7 @@ def test_set_webui_skill_enabled_persists_and_updates_runtime(
     _write_skill(tmp_path, "custom-skill")
     config = _config()
     saved: list[object] = []
-    monkeypatch.setattr("nanobot.webui.skills_api.load_config", lambda _path=None: config)
+    monkeypatch.setattr("nanobot.webui.skills_api.load_config", lambda _path=None, *, home=None: config)
     monkeypatch.setattr(
         "nanobot.webui.skills_api.save_config",
         lambda value, _path=None: saved.append(value),
@@ -175,7 +175,7 @@ def test_delete_webui_skill_only_deletes_workspace_skills(
     directory = _write_skill(tmp_path, "custom-skill")
     config = _config("custom-skill")
     saved: list[object] = []
-    monkeypatch.setattr("nanobot.webui.skills_api.load_config", lambda _path=None: config)
+    monkeypatch.setattr("nanobot.webui.skills_api.load_config", lambda _path=None, *, home=None: config)
     monkeypatch.setattr(
         "nanobot.webui.skills_api.save_config",
         lambda value, _path=None: saved.append(value),
@@ -229,7 +229,7 @@ def test_delete_webui_skill_restores_directory_when_config_save_fails(
 ) -> None:
     directory = _write_skill(tmp_path, "custom-skill")
     config = _config("custom-skill")
-    monkeypatch.setattr("nanobot.webui.skills_api.load_config", lambda _path=None: config)
+    monkeypatch.setattr("nanobot.webui.skills_api.load_config", lambda _path=None, *, home=None: config)
 
     def fail_save(_config: object, _path: Path | None = None) -> None:
         raise OSError("disk full")

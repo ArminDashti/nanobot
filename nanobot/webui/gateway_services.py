@@ -125,6 +125,7 @@ def build_gateway_services(
     ))
     transcripts = WebUITranscriptRecorder(log=logger)
     workspaces = WebUIWorkspaceController(
+        home=paths.home,
         session_manager=session_manager,
         default_workspace=workspace_path,
         default_restrict_to_workspace=default_restrict_to_workspace,

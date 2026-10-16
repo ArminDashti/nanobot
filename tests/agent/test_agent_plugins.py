@@ -592,3 +592,68 @@ def test_plugin_activation_does_not_survive_in_place_code_replacement(
     assert discover_agent_plugins(tmp_path)[0].enabled is False
     assert enabled_agent_plugin_skill_dirs(tmp_path) == ()
     assert agent_plugin_mcp_servers(tmp_path) == {}
+
+
+def test_config_bound_plugin_approval_and_data_survive_home_change(tmp_path, monkeypatch):
+    from nanobot.agent.tools.mcp import MCPProvider
+    from nanobot.agent.tools.registry import ToolRegistry
+    from nanobot.config.loader import load_config
+
+    workspace = tmp_path / "workspace"
+    plugin = _plugin(workspace)
+    _write_json(plugin / "mcp.json", {
+        "$schema": AGENT_PLUGIN_MCP_SCHEMA,
+        "mcpServers": {"demo": {
+            "type": "stdio", "command": "python", "args": ["${PLUGIN_DATA}/state"],
+            "cwd": "${PLUGIN_DATA}",
+        }},
+    })
+    first_home, second_home = tmp_path / "a", tmp_path / "b"
+    config = load_config(tmp_path / "external.json", home=first_home)
+    config.agents.defaults.workspace = str(workspace)
+    monkeypatch.setattr(agent_plugins, "get_home_path", lambda: second_home)
+    set_agent_plugin_enabled(workspace, "demo", True)
+
+    assert MCPProvider.from_config(config, ToolRegistry()).configured_server_names == set()
+    set_agent_plugin_enabled(workspace, "demo", True, home=first_home)
+    set_agent_plugin_enabled(workspace, "demo", False, home=second_home)
+    assert MCPProvider.from_config(config, ToolRegistry()).configured_server_names == {"demo"}
+    server = agent_plugin_mcp_servers(workspace, home=first_home)["demo"]
+    data = Path(server.env["PLUGIN_DATA"])
+    assert data.is_relative_to(first_home / "plugin-data")
+    assert server.cwd == str(data)
+    assert server.args == [str(data / "state")]
+    assert discover_agent_plugins(workspace, home=first_home)[0].enabled is True
+    assert discover_agent_plugins(workspace, home=second_home)[0].enabled is False
+
+
+async def test_bound_plugin_skills_and_read_access_ignore_other_home(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    project = tmp_path / "project"
+    project.mkdir()
+    plugin = _plugin(workspace)
+    resource = _skill(plugin / "skills", "demo-skill", body="approved skill") / "SKILL.md"
+    first_home, second_home = tmp_path / "a", tmp_path / "b"
+    loader = SkillsLoader(workspace, builtin_skills_dir=tmp_path / "builtin", home=first_home)
+    read_tool = ReadFileTool.create(ToolContext(
+        config=ToolsConfig(restrict_to_workspace=True), workspace=str(workspace),
+        instance_home=first_home,
+    ))
+    monkeypatch.setattr(agent_plugins, "get_home_path", lambda: second_home)
+    set_agent_plugin_enabled(workspace, "demo", True, home=second_home)
+    assert loader.list_skills() == []
+    scope = validate_workspace_scope_payload(
+        {"project_path": str(project), "access_mode": "restricted"},
+        default_workspace=workspace, default_restrict_to_workspace=True,
+    )
+    token = bind_workspace_scope(scope)
+    try:
+        assert "outside allowed directory" in await read_tool.execute(path=str(resource))
+        set_agent_plugin_enabled(workspace, "demo", True, home=first_home)
+        assert "approved skill" in (loader.load_skill("demo-skill") or "")
+        assert "approved skill" in await read_tool.execute(path=str(resource))
+        set_agent_plugin_enabled(workspace, "demo", False, home=first_home)
+        assert "outside allowed directory" in await read_tool.execute(path=str(resource))
+        assert loader.list_skills() == []
+    finally:
+        reset_workspace_scope(token)
