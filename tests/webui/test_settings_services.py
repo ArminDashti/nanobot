@@ -251,7 +251,8 @@ def test_settings_keep_external_config_and_oauth_home_after_selection_changes(
     from oauth_cli_kit.models import OAuthToken
 
     from nanobot.providers.oauth_storage import codex_token_storage
-    from nanobot.webui.settings_api import logout_oauth_provider
+    from nanobot.webui.settings_api import logout_oauth_provider, update_network_safety_settings
+    from nanobot.webui.workspaces import read_webui_default_access_mode
 
     config_path = tmp_path / "external" / "settings.json"
     save_config(Config(), config_path)
@@ -277,6 +278,10 @@ def test_settings_keep_external_config_and_oauth_home_after_selection_changes(
     assert load_config(config_path, home=first_home).api.port == 19002
     assert load_config(config_path, home=first_home).api.host == "127.0.0.4"
     assert not (first_home / "config.json").exists()
+    first.mutate(update_network_safety_settings, {"webui_default_access_mode": ["full"]})
+    assert first.read(settings_payload)["advanced"]["webui_default_access_mode"] == "full"
+    assert read_webui_default_access_mode(home=first_home) == "full"
+    assert read_webui_default_access_mode(home=second_home) == "default"
     first.read(
         logout_oauth_provider, {"provider": ["openai_codex"]}, oauth_flows=first.oauth_flows,
     )

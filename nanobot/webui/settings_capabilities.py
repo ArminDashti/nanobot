@@ -599,7 +599,7 @@ def network_safety_payload(config: Config) -> dict[str, Any]:
     return {
         "webui_allow_local_service_access": config.tools.webui_allow_local_service_access,
         "allow_local_preview_access": config.tools.webui_allow_local_service_access,
-        "webui_default_access_mode": read_webui_default_access_mode(),
+        "webui_default_access_mode": read_webui_default_access_mode(home=config.instance_home),
         "private_service_protection_enabled": True,
         "ssrf_whitelist_count": len(config.tools.ssrf_whitelist),
     }

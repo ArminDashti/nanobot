@@ -429,7 +429,7 @@ def update_network_safety_settings(
         _save_settings_config(config, config_path)
     if default_access_mode is not None:
         try:
-            write_webui_default_access_mode(default_access_mode)
+            write_webui_default_access_mode(default_access_mode, home=config.instance_home)
         except ValueError as exc:
             raise WebUISettingsError(str(exc)) from exc
     return settings_payload(requires_restart=changed, config_path=config_path, home=home)
