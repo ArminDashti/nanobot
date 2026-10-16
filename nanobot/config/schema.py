@@ -542,12 +542,12 @@ class Config(BaseSettings):
 
     @property
     def source_path(self) -> Path:
-        """Return the file used for explicit configuration saves."""
+        """Return the configuration snapshot's bound source file."""
         return self._instance_paths.config_path
 
     @property
     def instance_home(self) -> Path:
-        """Return the instance identity captured when this config was created."""
+        """Return the instance home bound to this configuration snapshot."""
         return self._instance_paths.home
 
     @property

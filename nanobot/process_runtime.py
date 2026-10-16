@@ -257,7 +257,6 @@ class ManagedProcessRuntime(Generic[_StartOptionsT]):
 
     @staticmethod
     def selectors_mismatch(status: ProcessStatus, options: ProcessStartOptions) -> bool:
-        """Compare the effective paths recorded by a live process."""
         return process_selectors_mismatch(status, options)
 
     def read_log_tail(self, *, tail: int = 200) -> list[str]:

@@ -44,25 +44,15 @@ def _isolate_nanobot_log_activation() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
-def _isolate_sessions_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Redirect session storage away from the real active config data directory.
-
-    Session storage lives under the active runtime data root (outside the workspace,
-    per ADR-0001), so without redirection tests would write into the real home.
-    """
-    data_root = tmp_path.parent / "session-data" / uuid4().hex
-    runtime_root = data_root / "runtime"
+def _isolate_sessions_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    from nanobot.config.home import get_home_path
 
     def runtime_subdir(name: str) -> Path:
-        path = runtime_root / name
+        path = get_home_path() / name
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    monkeypatch.setattr(
-        "nanobot.session.location.get_runtime_subdir",
-        runtime_subdir,
-    )
-    yield
+    monkeypatch.setattr("nanobot.session.location.get_runtime_subdir", runtime_subdir)
 
 
 @pytest.fixture(autouse=True)

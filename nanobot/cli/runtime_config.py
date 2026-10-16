@@ -156,6 +156,7 @@ def _validate_session_storage(config: Config, *, workspace_override: str | None 
     console.print(Text("Cannot start: chat history must be outside the workspace.", style="red"))
     console.print()
     console.print(Text(f"Workspace ({source}): {workspace}"))
+    console.print(Text(f"Config: {config.source_path}"))
     console.print(Text(f"Chat history: {sessions}"))
     console.print()
     console.print("To fix, keep the workspace in place:")

@@ -370,6 +370,34 @@ def serve(
 ):
     """Start the OpenAI-compatible API server (/v1/chat/completions)."""
     runtime_config = _load_runtime_config(config, workspace)
+    from nanobot.api.runtime import ApiRuntime, ApiStartOptions, api_runtime_paths
+
+    api_cfg = runtime_config.api
+    host = host if host is not None else api_cfg.host
+    port = port if port is not None else api_cfg.port
+    timeout = timeout if timeout is not None else api_cfg.timeout
+    runtime = ApiRuntime(paths=api_runtime_paths(runtime_config.instance_home))
+    options = ApiStartOptions(
+        home=str(runtime_config.instance_home),
+        config_path=str(runtime_config.source_path),
+        workspace=str(runtime_config.workspace_path),
+        port=port,
+        host=host,
+        verbose=verbose,
+    )
+    try:
+        with runtime.foreground_instance(options):
+            _run_api_server(runtime_config, host=host, port=port, timeout=timeout, verbose=verbose)
+    except RuntimeError as exc:
+        console.print(Text(f"API cannot start: {exc}", style="red"))
+        status = runtime.status()
+        if status.running:
+            console.print(f"Active config: {status.config_path}", markup=False)
+            console.print(f"Active agent workspace: {status.workspace}", markup=False)
+        raise typer.Exit(1) from exc
+
+
+def _run_api_server(runtime_config: Config, *, host: str, port: int, timeout: float, verbose: bool) -> None:
     try:
         from aiohttp import web  # noqa: F401
     except ImportError:
@@ -384,9 +412,6 @@ def serve(
     _set_nanobot_logs(verbose)
 
     api_cfg = runtime_config.api
-    host = host if host is not None else api_cfg.host
-    port = port if port is not None else api_cfg.port
-    timeout = timeout if timeout is not None else api_cfg.timeout
     api_key = api_cfg.api_key.strip() if api_cfg.api_key else ""
     if not is_loopback_host(host) and not api_key:
         console.print(
@@ -396,7 +421,10 @@ def serve(
         raise typer.Exit(1)
     sync_workspace_templates(runtime_config.workspace_path)
     bus = MessageBus()
-    session_manager = SessionManager(runtime_config.workspace_path)
+    session_manager = SessionManager(
+        runtime_config.workspace_path,
+        sessions_root=runtime_config.instance_home / "sessions",
+    )
     tools = ToolRegistry()
     register_image_generation_tool(runtime_config, tools, workspace=runtime_config.workspace_path)
     mcp_provider = MCPProvider.from_config(runtime_config, tools)
