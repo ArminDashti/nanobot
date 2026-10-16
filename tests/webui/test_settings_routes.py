@@ -390,6 +390,7 @@ async def test_oauth_completion_reads_websocket_payload(
         *,
         oauth_flows=None,
         config_path=None,
+        home=None,
     ):
         captured.update(query=query, authorization_response=authorization_response)
         return {
@@ -488,7 +489,7 @@ async def test_runtime_config_mutation_routes_refresh_live_runtime(
     captured: dict[str, object] = {}
     refresh_runtime_config = MagicMock()
 
-    def mutate(query, *, config_path=None):
+    def mutate(query, *, config_path=None, home=None):
         captured["query"] = query
         return {"routed": function_name}
 
@@ -512,7 +513,7 @@ async def test_model_update_route_forwards_session_rename_dependency(monkeypatch
     refresh_runtime_config = MagicMock()
     captured: dict[str, object] = {}
 
-    def update(query, *, config_path=None, rename_model_preset=None):
+    def update(query, *, config_path=None, home=None, rename_model_preset=None):
         captured.update(query=query, rename_model_preset=rename_model_preset)
         return {"updated": True}
 
