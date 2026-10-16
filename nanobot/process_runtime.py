@@ -79,6 +79,20 @@ class ProcessRuntimePaths:
     log_path: Path
 
 
+class RuntimeOwnershipConflictError(RuntimeError):
+    """Multiple live records prevent choosing a component owner safely."""
+
+    def __init__(self, service: str, statuses: list[ProcessStatus]) -> None:
+        records = "\n".join(
+            f"  {status.state_path} (PID {status.pid})" for status in statuses
+        )
+        super().__init__(
+            f"Multiple live {service} processes have runtime records in this home. "
+            "Stop them from their original terminals or process supervisors before "
+            f"starting the upgraded {service}.\n{records}"
+        )
+
+
 _StartOptionsT = TypeVar("_StartOptionsT", bound=ProcessStartOptions)
 
 
@@ -173,8 +187,8 @@ class ManagedProcessRuntime(Generic[_StartOptionsT]):
         if not status.pid:
             return ProcessResult(False, self._message("not_running"), status)
 
-        state = self._read_state()
-        identity_match = self._process_identity_match(state, status.pid)
+        state = self._read_state(status.state_path)
+        identity_match = self._runtime_identity_match(state, status.pid, status.state_path)
         if identity_match == "unknown":
             return ProcessResult(
                 False,
@@ -182,7 +196,7 @@ class ManagedProcessRuntime(Generic[_StartOptionsT]):
                 status,
             )
         if identity_match == "mismatch":
-            self._clear_state()
+            self._clear_state(status.state_path)
             return ProcessResult(
                 False,
                 self._message("state_stale"),
@@ -198,7 +212,7 @@ class ManagedProcessRuntime(Generic[_StartOptionsT]):
                     final_status,
                 )
             return ProcessResult(True, self._message("stopped"), final_status)
-        self._clear_state()
+        self._clear_state(status.state_path)
         return ProcessResult(True, self._message("stopped"), self.status(reason="stopped"))
 
     def restart(self, options: _StartOptionsT, *, timeout_s: int = 20) -> ProcessResult:
@@ -215,25 +229,41 @@ class ManagedProcessRuntime(Generic[_StartOptionsT]):
 
     def status(self, *, reason: str | None = None) -> ProcessStatus:
         """Return live status, clearing stale state when needed."""
-        state = self._read_state()
+        canonical = self._status_at_path(self.paths.state_path, reason=reason)
+        if self.paths.state_path.name != f"{self.service_name}.json":
+            return canonical
+        active = [canonical] if canonical.running else []
+        for path in sorted(self.paths.run_dir.glob(f"{self.service_name}.*.json")):
+            # Released runtimes used a 16-digit selector hash, never client lease files.
+            if not re.fullmatch(rf"{self.service_name}\.[0-9a-f]{{16}}\.json", path.name):
+                continue
+            status = self._status_at_path(path, reason=reason)
+            if status.running:
+                active.append(status)
+        if len(active) > 1:
+            raise RuntimeOwnershipConflictError(self.service_name, active)
+        return active[0] if active else canonical
+
+    def _status_at_path(self, path: Path, *, reason: str | None) -> ProcessStatus:
+        state = self._read_state(path)
         pid = _as_int(state.get("pid")) if state else None
         if pid is None:
             return ProcessStatus(
                 running=False,
                 pid=None,
-                state_path=self.paths.state_path,
+                state_path=path,
                 log_path=self.paths.log_path,
                 reason=reason or "not_started",
             )
         assert state is not None
 
-        identity_match = self._process_identity_match(state, pid)
+        identity_match = self._runtime_identity_match(state, pid, path)
         if not self._is_pid_running(pid) or identity_match == "mismatch":
-            self._clear_state()
+            self._clear_state(path)
             return ProcessStatus(
                 running=False,
                 pid=None,
-                state_path=self.paths.state_path,
+                state_path=path,
                 log_path=self.paths.log_path,
                 reason=reason or "stale_state",
             )
@@ -242,8 +272,11 @@ class ManagedProcessRuntime(Generic[_StartOptionsT]):
         return ProcessStatus(
             running=True,
             pid=pid,
-            state_path=self.paths.state_path,
-            log_path=self.paths.log_path,
+            state_path=path,
+            log_path=(
+                self.paths.log_path if path == self.paths.state_path
+                else self.paths.logs_dir / f"{path.stem}.log"
+            ),
             started_at=_as_str(state.get("started_at")),
             port=_as_int(state.get("port")),
             command=tuple(cast(list[str], command)) if isinstance(command, list) else (),
@@ -254,6 +287,15 @@ class ManagedProcessRuntime(Generic[_StartOptionsT]):
             workspace=_as_str(state.get("workspace")),
             home=_as_str(state.get("home")),
         )
+
+    def _runtime_identity_match(
+        self, state: dict[str, Any] | None, pid: int, path: Path,
+    ) -> Literal["match", "mismatch", "unknown"]:
+        if path != self.paths.state_path and state and (
+            state.get("stable_identity") is None and state.get("identity") is None
+        ):
+            return "unknown"
+        return self._process_identity_match(state, pid)
 
     @staticmethod
     def selectors_mismatch(status: ProcessStatus, options: ProcessStartOptions) -> bool:
@@ -498,9 +540,9 @@ class ManagedProcessRuntime(Generic[_StartOptionsT]):
             recorded = state.get("identity")
         return self.process_identity_match(recorded, pid)
 
-    def _read_state(self) -> dict[str, Any] | None:
+    def _read_state(self, path: Path | None = None) -> dict[str, Any] | None:
         try:
-            with self.paths.state_path.open(encoding="utf-8") as handle:
+            with (path or self.paths.state_path).open(encoding="utf-8") as handle:
                 payload = json.load(handle)
         except (OSError, json.JSONDecodeError, ValueError):
             return None
@@ -524,8 +566,8 @@ class ManagedProcessRuntime(Generic[_StartOptionsT]):
         finally:
             tmp_path.unlink(missing_ok=True)
 
-    def _clear_state(self) -> None:
-        self.paths.state_path.unlink(missing_ok=True)
+    def _clear_state(self, path: Path | None = None) -> None:
+        (path or self.paths.state_path).unlink(missing_ok=True)
 
 
 def _platform_name() -> str:

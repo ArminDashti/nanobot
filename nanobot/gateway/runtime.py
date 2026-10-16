@@ -286,7 +286,7 @@ class GatewayRuntime(ManagedProcessRuntime[GatewayStartOptions]):
     def status(self, *, reason: str | None = None) -> GatewayStatus:
         """Return process, launch, and client lifetime state in one snapshot."""
         process = super().status(reason=reason)
-        state = self._read_state() if process.running else None
+        state = self._read_state(process.state_path) if process.running else None
         raw_mode = state.get("launch_mode") if state else None
         launch_mode: GatewayLaunchMode = (
             raw_mode if raw_mode in {"foreground", "background"} else "unknown"
