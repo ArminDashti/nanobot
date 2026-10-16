@@ -16,6 +16,17 @@ from loguru import logger
 
 
 @pytest.fixture(autouse=True)
+def _isolate_instance_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from nanobot.config import home, loader
+
+    user_home = tmp_path / "user-home"
+    monkeypatch.setenv("HOME", str(user_home))
+    monkeypatch.setenv("USERPROFILE", str(user_home))
+    monkeypatch.setattr(home, "_home_path", None)
+    monkeypatch.setattr(loader, "_current_config_path", None)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_tokenizer_warmup(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep tests deterministic and out of the user's tokenizer cache and network."""
     monkeypatch.setattr("nanobot.utils.token_encoding._encoding", None)

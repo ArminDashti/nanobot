@@ -47,6 +47,7 @@ from nanobot.cli.agent import agent  # noqa: E402
 from nanobot.cli.gateway import create_gateway_app  # noqa: E402
 from nanobot.cli.gateway_runtime import _run_gateway  # noqa: E402
 from nanobot.cli.log_control import _set_nanobot_logs  # noqa: E402
+from nanobot.cli.paths import paths  # noqa: E402
 from nanobot.cli.process_identity import set_cli_process_identity  # noqa: E402
 from nanobot.cli.provider import provider_app  # noqa: E402
 from nanobot.cli.runtime_config import (  # noqa: E402
@@ -56,6 +57,7 @@ from nanobot.cli.runtime_config import (  # noqa: E402
     _print_config_error,
     _print_model_setup_steps,
     _provider_setup_error,
+    _resolve_workspace_override,
 )
 from nanobot.cli.webui import webui  # noqa: E402
 from nanobot.cli.webui_support import (  # noqa: E402
@@ -120,10 +122,15 @@ def main(
     ),
 ):
     """nanobot - Personal AI Assistant."""
+    from nanobot.config.loader import get_selected_config_path, set_config_path
+
+    previous_config = get_selected_config_path()
+    ctx.call_on_close(lambda: set_config_path(previous_config))
     if home is not None:
         from nanobot.config.home import get_selected_home_path, set_home_path
 
         previous_home = get_selected_home_path()
+        set_config_path(None)
         set_home_path(home)
         ctx.call_on_close(lambda: set_home_path(previous_home))
     # Editable/source installs can retain an older generated console script that
@@ -169,8 +176,8 @@ def onboard(
         config_path = get_config_path()
 
     def _apply_workspace_override(loaded: Config) -> Config:
-        if workspace:
-            loaded.agents.defaults.workspace = workspace
+        if workspace is not None:
+            loaded.agents.defaults.workspace = _resolve_workspace_override(workspace)
         return loaded
 
     loaded_config: Config | None = None
@@ -628,6 +635,8 @@ def plugins_disable(
 # ============================================================================
 # Status Commands
 # ============================================================================
+
+app.command()(paths)
 
 
 @app.command()
