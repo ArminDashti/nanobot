@@ -29,6 +29,12 @@ host_runtime = ApiRuntime(paths=paths)
 runtime = ApiRuntime(paths=paths, platform_name=sys.argv[2])
 runtime._process_identity = host_runtime.process_identity
 runtime._is_pid_running = host_runtime.process_is_running
+
+def publish_result(payload):
+    path = home / "result.tmp"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    path.replace(home / "result.json")
+
 options = ApiStartOptions(
     port=9900, home=str(home), config_path=str(home / "config.json"),
     workspace=str(home / "workspace"),
@@ -40,15 +46,15 @@ while not (home / "claim").exists():
     time.sleep(0.01)
 try:
     with runtime.foreground_instance(options):
-        (home / "result.json").write_text(json.dumps({
+        publish_result({
             "pid": os.getpid(), "parent": os.getppid(), "result": "claimed",
-        }), encoding="utf-8")
+        })
         while not (home / "exit").exists():
             if time.monotonic() > deadline:
                 raise TimeoutError("API exit was not released")
             time.sleep(0.01)
 except RuntimeError as exc:
-    (home / "result.json").write_text(json.dumps({"result": str(exc)}), encoding="utf-8")
+    publish_result({"result": str(exc)})
 """
 
 
