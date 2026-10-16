@@ -639,7 +639,7 @@ def test_provider_logout_openai_codex_removes_local_oauth_files(tmp_path, monkey
     lock_path.write_text("", encoding="utf-8")
     monkeypatch.setenv("OAUTH_CLI_KIT_TOKEN_PATH", str(token_path))
 
-    result = runner.invoke(app, ["provider", "logout", "openai-codex"])
+    result = runner.invoke(app, ["--home", str(tmp_path), "provider", "logout", "openai-codex"])
 
     assert result.exit_code == 0
     assert not token_path.exists()
@@ -655,7 +655,7 @@ def test_provider_logout_github_copilot_removes_local_oauth_files(tmp_path, monk
     lock_path.write_text("", encoding="utf-8")
     monkeypatch.setenv("OAUTH_CLI_KIT_TOKEN_PATH", str(token_path))
 
-    result = runner.invoke(app, ["provider", "logout", "github-copilot"])
+    result = runner.invoke(app, ["--home", str(tmp_path), "provider", "logout", "github-copilot"])
 
     assert result.exit_code == 0
     assert not token_path.exists()
@@ -667,7 +667,7 @@ def test_provider_logout_openai_codex_succeeds_when_no_local_oauth_file(monkeypa
     token_path = tmp_path / "auth" / "codex.json"
     monkeypatch.setenv("OAUTH_CLI_KIT_TOKEN_PATH", str(token_path))
 
-    result = runner.invoke(app, ["provider", "logout", "openai-codex"])
+    result = runner.invoke(app, ["--home", str(tmp_path), "provider", "logout", "openai-codex"])
 
     assert result.exit_code == 0
     assert "No local OAuth credentials found for OpenAI Codex" in result.stdout
@@ -681,10 +681,10 @@ def test_provider_logout_xai_grok_removes_instance_credentials(tmp_path, monkeyp
     lock_path.write_text("", encoding="utf-8")
     monkeypatch.setattr(
         "nanobot.providers.xai_oauth.get_xai_oauth_storage_path",
-        lambda: token_path,
+        lambda home=None: token_path,
     )
 
-    result = runner.invoke(app, ["provider", "logout", "xai-grok"])
+    result = runner.invoke(app, ["--home", str(tmp_path), "provider", "logout", "xai-grok"])
 
     assert result.exit_code == 0
     assert not token_path.exists()
@@ -718,27 +718,25 @@ def test_provider_logout_github_copilot_succeeds_when_no_local_oauth_file(monkey
     token_path = tmp_path / "auth" / "github-copilot.json"
     monkeypatch.setenv("OAUTH_CLI_KIT_TOKEN_PATH", str(token_path))
 
-    result = runner.invoke(app, ["provider", "logout", "github-copilot"])
+    result = runner.invoke(app, ["--home", str(tmp_path), "provider", "logout", "github-copilot"])
 
     assert result.exit_code == 0
     assert "No local OAuth credentials found for GitHub Copilot" in result.stdout
 
 
-def test_provider_logout_rejects_unknown_provider():
-    result = runner.invoke(app, ["provider", "logout", "not-a-real-provider"])
+def test_provider_logout_rejects_unknown_provider(tmp_path):
+    result = runner.invoke(app, ["--home", str(tmp_path), "provider", "logout", "not-a-real-provider"])
 
     assert result.exit_code == 1
     assert "Unknown OAuth provider" in result.stdout
 
 
 def test_provider_logout_paths_resolve_to_expected_files():
-    from oauth_cli_kit.providers import OPENAI_CODEX_PROVIDER
-    from oauth_cli_kit.storage import FileTokenStorage
-
     from nanobot.providers.github_copilot_provider import get_storage
+    from nanobot.providers.oauth_storage import codex_token_storage
     from nanobot.providers.xai_oauth import get_xai_oauth_storage_path
 
-    codex_storage = FileTokenStorage(token_filename=OPENAI_CODEX_PROVIDER.token_filename)
+    codex_storage = codex_token_storage()
     codex_path = codex_storage.get_token_path()
     assert codex_path.name == "codex.json"
     assert codex_path.parent.name == "auth"
@@ -915,7 +913,7 @@ def test_provider_login_openai_codex_passes_configured_proxy(monkeypatch):
 
     captured: dict[str, str | None] = {}
 
-    def fake_login(*, print_fn, prompt_fn, proxy=None):
+    def fake_login(*, print_fn, prompt_fn, proxy=None, storage=None):
         captured["proxy"] = proxy
         return SimpleNamespace(access="access-token", account_id="acct-test")
 
@@ -957,7 +955,7 @@ def test_provider_login_openai_codex_uses_explicit_config_proxy(tmp_path, monkey
 
     captured: dict[str, str | None] = {}
 
-    def fake_get_token(*, proxy=None):
+    def fake_get_token(*, proxy=None, storage=None):
         captured["proxy"] = proxy
         return SimpleNamespace(access="access-token", account_id="acct-test")
 
@@ -987,7 +985,7 @@ def test_provider_login_openai_codex_resolves_proxy_env_ref(monkeypatch):
 
     captured: dict[str, str | None] = {}
 
-    def fake_get_token(*, proxy=None):
+    def fake_get_token(*, proxy=None, storage=None):
         captured["proxy"] = proxy
         return SimpleNamespace(access="access-token", account_id="acct-test")
 
@@ -1011,7 +1009,7 @@ def test_provider_login_xai_grok_runs_browser_flow_with_configured_proxy(monkeyp
     )
     captured: dict[str, object] = {}
 
-    def fake_login(*, print_fn, prompt_fn, proxy=None):
+    def fake_login(*, print_fn, prompt_fn, proxy=None, storage=None):
         captured.update(print_fn=print_fn, prompt_fn=prompt_fn, proxy=proxy)
         return SimpleNamespace(access="access-token", account_id="user@example.com")
 
