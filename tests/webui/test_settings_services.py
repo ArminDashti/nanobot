@@ -108,8 +108,8 @@ def test_settings_mutations_serialize_read_modify_write(
 
     original_load = settings_api._load_settings_config
 
-    def controlled_load(path: Path | None) -> Config:
-        config = original_load(path)
+    def controlled_load(path: Path | None, *, home: Path | None = None) -> Config:
+        config = original_load(path, home=home)
         if threading.current_thread().name == "settings-first":
             first_loaded.set()
             if not release_first.wait(timeout=2):
@@ -169,8 +169,8 @@ def test_distinct_gateways_serialize_mutations_for_the_same_config(
 
     original_load = settings_api._load_settings_config
 
-    def controlled_load(path: Path | None) -> Config:
-        config = original_load(path)
+    def controlled_load(path: Path | None, *, home: Path | None = None) -> Config:
+        config = original_load(path, home=home)
         if threading.current_thread().name == "gateway-first":
             first_loaded.set()
             if not release_first.wait(timeout=2):
@@ -243,3 +243,58 @@ def test_oauth_registry_preserves_expiry_capacity_completion_and_cancel() -> Non
     registry.clear("openai_codex")
     assert replacement.cancel_count == 1
     assert registry.get("openai_codex", "replacement") is None
+
+
+def test_settings_keep_external_config_and_oauth_home_after_selection_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from oauth_cli_kit.models import OAuthToken
+
+    from nanobot.providers.oauth_storage import codex_token_storage
+    from nanobot.webui.settings_api import logout_oauth_provider
+
+    config_path = tmp_path / "external" / "settings.json"
+    save_config(Config(), config_path)
+    first_home, second_home = tmp_path / "a", tmp_path / "b"
+    first = WebUISettingsServices.create(config_path, home=first_home)
+    second = WebUISettingsServices.create(config_path, home=second_home)
+    for home, account in ((first_home, "first"), (second_home, "second")):
+        codex_token_storage(home).save(OAuthToken(
+            access=account, refresh="refresh", expires=9999999999999, account_id=account,
+        ))
+    monkeypatch.setattr("nanobot.config.home._home_path", tmp_path / "other")
+    monkeypatch.setattr("nanobot.config.loader._current_config_path", tmp_path / "other.json")
+
+    for services, home, account in ((first, first_home, "first"), (second, second_home, "second")):
+        assert services.config.load().instance_home == home
+        payload = services.read(settings_payload)
+        rows = {row["name"]: row for row in payload["providers"]}
+        assert rows["openai_codex"]["oauth_account"] == account
+        assert rows["openai_codex"]["configured"] is True
+
+    first.mutate(update_api_settings, {"port": ["19002"]})
+    first.config.update(lambda config: setattr(config.api, "host", "127.0.0.4"))
+    assert load_config(config_path, home=first_home).api.port == 19002
+    assert load_config(config_path, home=first_home).api.host == "127.0.0.4"
+    assert not (first_home / "config.json").exists()
+    first.read(
+        logout_oauth_provider, {"provider": ["openai_codex"]}, oauth_flows=first.oauth_flows,
+    )
+    assert codex_token_storage(first_home).load() is None
+    assert codex_token_storage(second_home).load().account_id == "second"
+
+
+def test_gateway_media_remains_bound_to_selected_home(tmp_path: Path, monkeypatch) -> None:
+    first_home = tmp_path / "a"
+    gateway = build_gateway_services(
+        config=WebSocketConfig(), bus=MagicMock(), session_manager=None, static_dist_path=None,
+        workspace_path=tmp_path / "workspace", default_restrict_to_workspace=False,
+        config_path=tmp_path / "external" / "config.json", instance_home=first_home,
+        runtime_model_name=None, runtime_surface="browser", runtime_capabilities_overrides=None,
+    )
+    monkeypatch.setattr("nanobot.config.home._home_path", tmp_path / "b")
+    image_path = first_home / "media" / "test.png"
+    image_path.write_bytes(b"image")
+    assert gateway.media.sign_or_stage_media_path(image_path) is not None
+    assert gateway.settings.config.load().instance_home == first_home
+    assert not (tmp_path / "b").exists()
