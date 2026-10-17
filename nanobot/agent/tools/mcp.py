@@ -22,6 +22,7 @@ from nanobot.agent.tools.context import tool_log_content_allowed
 from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.security.network import (
     PinnedDNSAsyncTransport,
+    configure_ssrf_whitelist,
     env_proxy_applies_to_url,
     httpx_env_proxy_mounts,
     resolve_url_target,
@@ -1353,6 +1354,7 @@ def session_extra(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
 
 
 def _load_current_servers(plugins: AgentPlugins | None = None) -> dict[str, MCPServerConfig]:
+    """Load the MCP reload candidate and activate its validated network policy."""
     from nanobot.config.loader import get_config_path, load_config, resolve_config_env_vars
 
     config = resolve_config_env_vars(load_config())
@@ -1361,7 +1363,9 @@ def _load_current_servers(plugins: AgentPlugins | None = None) -> dict[str, MCPS
             home=config.runtime_data_dir or get_config_path().expanduser().resolve().parent,
             workspace=config.workspace_path,
         )
-    return plugins.mcp_servers(config.tools.mcp_servers)
+    servers = plugins.mcp_servers(config.tools.mcp_servers)
+    configure_ssrf_whitelist(config.tools.ssrf_whitelist)
+    return servers
 
 
 class MCPProvider:
