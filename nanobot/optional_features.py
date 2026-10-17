@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
@@ -54,6 +55,7 @@ class InstallResult:
 
 _INSTALL_TIMEOUT_SECONDS = 300
 _LOG_OUTPUT_LIMIT = 4000
+_FEATURE_INSTALL_LOCK = threading.Lock()
 _HIDDEN_OPTIONAL_FEATURES = {"documents", "pdf"}
 _BUNDLED_FEATURE_ALIASES = {"documents", "pdf"}
 
@@ -649,24 +651,25 @@ def _install_feature_dependencies(
     Returns ``True`` only when this call ran an installer. Package-install
     authorization belongs here so every WebUI action gets the same policy.
     """
-    if not dependencies or extra_installed(name, dependencies):
-        return False
-    if not allow_install:
-        raise OptionalFeatureError(
-            "Installing optional features from a remote WebUI is disabled. "
-            "Run this action from localhost or set tools.webuiAllowRemotePackageInstall to true.",
-            status=403,
+    with _FEATURE_INSTALL_LOCK:
+        if not dependencies or extra_installed(name, dependencies):
+            return False
+        if not allow_install:
+            raise OptionalFeatureError(
+                "Installing optional features from a remote WebUI is disabled. "
+                "Run this action from localhost or set tools.webuiAllowRemotePackageInstall to true.",
+                status=403,
+            )
+        result = install_extra(
+            name,
+            dependencies,
+            runner=runner,
         )
-    result = install_extra(
-        name,
-        dependencies,
-        runner=runner,
-    )
-    if not result.ok:
-        failed = command_text(result.failed_cmd or result.pip_cmd)
-        detail = f": {result.output}" if result.output else ""
-        raise OptionalFeatureError(f"Failed: {failed}{detail}", status=500)
-    return True
+        if not result.ok:
+            failed = command_text(result.failed_cmd or result.pip_cmd)
+            detail = f": {result.output}" if result.output else ""
+            raise OptionalFeatureError(f"Failed: {failed}{detail}", status=500)
+        return True
 
 
 def install_optional_feature_support(

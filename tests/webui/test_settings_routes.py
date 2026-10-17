@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 import threading
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
@@ -59,6 +60,104 @@ def _mutation_request(path: str, payload: dict[str, object]) -> SimpleNamespace:
     request._nanobot_webui_mutation_payload = payload
     request._nanobot_trusted_proxy_authenticated = True
     return request
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("same_feature", [False, True])
+async def test_concurrent_feature_actions_serialize_installation_without_blocking_config(
+    tmp_path, monkeypatch, same_feature,
+) -> None:
+    import nanobot.optional_features as optional_features
+    from nanobot.config.loader import load_config, save_config
+    from nanobot.config.schema import Config
+
+    config_path = tmp_path / "config.json"
+    workspace = str(tmp_path / "persisted-workspace")
+    save_config(Config.model_validate({
+        "agents": {"defaults": {"workspace": workspace}},
+        "providers": {"custom": {"apiKey": "${INSTALL_TEST_KEY}"}},
+        "channels": {"matrix": {"enabled": False}, "slack": {"enabled": False}},
+    }), config_path)
+    names = {"matrix"} if same_feature else {"matrix", "slack"}
+    installed: set[str] = set()
+    state_lock = threading.Lock()
+    entered = threading.Event()
+    release = threading.Event()
+    overlapped = threading.Event()
+    calls: list[str] = []
+    active = 0
+    maximum = 0
+    extra_installed = optional_features.extra_installed
+
+    def available(name, dependencies):
+        if name in names:
+            with state_lock:
+                return name in installed
+        return extra_installed(name, dependencies)
+
+    def installer(argv, **_kwargs):
+        nonlocal active, maximum
+        assert argv[1:4] == ["-m", "pip", "install"]
+        name = "matrix" if any("matrix-nio" in arg for arg in argv) else "slack"
+        assert name in names
+        with state_lock:
+            calls.append(name)
+            active += 1
+            maximum = max(maximum, active)
+            if active > 1:
+                overlapped.set()
+        entered.set()
+        assert release.wait(10)
+        with state_lock:
+            installed.add(name)
+            active -= 1
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(optional_features, "extra_installed", available)
+    monkeypatch.setattr(optional_features.subprocess, "run", installer)
+    router = _router(config_path=config_path)
+    connection = SimpleNamespace(remote_address=("127.0.0.1", 47561))
+    path = "/api/settings/nanobot-features/enable"
+
+    def local_request(route, payload):
+        req = _mutation_request(route, payload)
+        req.headers["Host"] = "127.0.0.1"
+        return req
+
+    tasks = [asyncio.create_task(router.dispatch(connection, local_request(path, {"name": "matrix"}), path))]
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        second_name = "matrix" if same_feature else "slack"
+        tasks.append(asyncio.create_task(router.dispatch(
+            connection, local_request(path, {"name": second_name, "install_only": True}), path,
+        )))
+        update_path = "/api/settings/runtime-config/update"
+        update_response = await asyncio.wait_for(router.dispatch(
+            connection,
+            local_request(update_path, {"values": {"agents.defaults.max_tool_iterations": 37}}),
+            update_path,
+        ), timeout=5)
+        assert update_response is not None and update_response.status_code == 200
+        observed_overlap = await asyncio.to_thread(overlapped.wait, 0.5)
+    finally:
+        release.set()
+        try:
+            responses = await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=10)
+        finally:
+            await router.close()
+    assert all(
+        not isinstance(response, BaseException) and response is not None and response.status_code == 200
+        for response in responses
+    )
+    assert not observed_overlap
+    assert maximum == 1
+    assert calls == (["matrix"] if same_feature else ["matrix", "slack"])
+    persisted = load_config(config_path)
+    assert persisted.channels.matrix["enabled"] is True
+    assert persisted.channels.slack["enabled"] is False
+    assert persisted.agents.defaults.max_tool_iterations == 37
+    assert persisted.agents.defaults.workspace == workspace
+    assert persisted.providers.custom.api_key == "${INSTALL_TEST_KEY}"
 
 
 @pytest.mark.asyncio
