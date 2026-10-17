@@ -124,11 +124,11 @@ async def test_usage_query_runs_off_the_event_loop(monkeypatch) -> None:
     calling_thread = threading.get_ident()
     worker_threads: list[int] = []
 
-    def usage_payload(**_kwargs):
+    def usage_payload(_self):
         worker_threads.append(threading.get_ident())
         return {"days": []}
 
-    monkeypatch.setattr("nanobot.webui.settings_routes.settings_usage_payload", usage_payload)
+    monkeypatch.setattr("nanobot.webui.settings_api.SettingsOperations.usage_payload", usage_payload)
     request = SimpleNamespace(path="/api/settings/usage", headers=Headers())
 
     response = await _router().dispatch(None, request, request.path)
@@ -230,8 +230,8 @@ async def test_mcp_oauth_start_uses_gateway_callback_and_requires_api_auth(monke
         url="https://app.xmind.com/api/mcp",
     )
     monkeypatch.setattr(
-        "nanobot.webui.settings_routes.ensure_mcp_oauth_server",
-        lambda _query, *, config_path=None: ("xmind", config),
+        "nanobot.webui.settings_routes.materialize_mcp_oauth_server",
+        lambda _config, _query: ("xmind", config),
     )
     router = _router()
     start = AsyncMock(return_value={
@@ -404,7 +404,7 @@ async def test_oauth_completion_reads_websocket_payload(
     captured: dict[str, object] = {}
 
     def complete(
-        query,
+        _self, query,
         authorization_response=None,
         *,
         oauth_flows=None,
@@ -417,7 +417,7 @@ async def test_oauth_completion_reads_websocket_payload(
             "flow_id": "flow-123",
         }
 
-    monkeypatch.setattr("nanobot.webui.settings_routes.complete_oauth_provider", complete)
+    monkeypatch.setattr("nanobot.webui.settings_api.SettingsOperations.oauth_complete", complete)
     router = _router()
     request = _mutation_request(
         "/api/settings/provider/oauth-login/complete",
@@ -454,43 +454,43 @@ async def test_oauth_completion_reads_websocket_payload(
     [
         (
             "/api/settings/update",
-            "update_agent_settings",
+            "update_agent",
             {"model_preset": "Codex"},
             {"model_preset": ["Codex"]},
         ),
         (
             "/api/settings/model-configurations/create",
-            "create_model_configuration",
+            "create_model",
             {"name": "Codex", "model": "openai-codex/gpt-5.6"},
             {"name": ["Codex"], "model": ["openai-codex/gpt-5.6"]},
         ),
         (
             "/api/settings/model-configurations/delete",
-            "delete_model_configuration",
+            "delete_model",
             {"name": "spare"},
             {"name": ["spare"]},
         ),
         (
             "/api/settings/model-configurations/migrate",
-            "migrate_model_configurations",
+            "migrate_models",
             {},
             {},
         ),
         (
             "/api/settings/model-call-order/update",
-            "update_model_call_order",
+            "update_call_order",
             {"order": ["backup"]},
             {"order": ['["backup"]']},
         ),
         (
             "/api/settings/provider/create",
-            "create_provider_settings",
+            "create_provider",
             {"name": "team", "api_base": "https://llm.example/v1"},
             {"name": ["team"], "api_base": ["https://llm.example/v1"]},
         ),
         (
             "/api/settings/provider/update",
-            "update_provider_settings",
+            "update_provider",
             {"provider": "team", "api_base": "https://llm.example/v2"},
             {"provider": ["team"], "api_base": ["https://llm.example/v2"]},
         ),
@@ -507,11 +507,11 @@ async def test_runtime_config_mutation_routes_refresh_live_runtime(
     captured: dict[str, object] = {}
     refresh_runtime_config = MagicMock()
 
-    def mutate(query, *, config_path=None):
+    def mutate(_self, query):
         captured["query"] = query
         return {"routed": function_name}
 
-    monkeypatch.setattr(f"nanobot.webui.settings_routes.{function_name}", mutate)
+    monkeypatch.setattr(f"nanobot.webui.settings_api.SettingsOperations.{function_name}", mutate)
     request = _mutation_request(route_path, payload)
 
     response = await _router(
@@ -531,11 +531,11 @@ async def test_model_update_route_forwards_session_rename_dependency(monkeypatch
     refresh_runtime_config = MagicMock()
     captured: dict[str, object] = {}
 
-    def update(query, *, config_path=None, rename_model_preset=None):
+    def update(_self, query, *, rename_model_preset=None):
         captured.update(query=query, rename_model_preset=rename_model_preset)
         return {"updated": True}
 
-    monkeypatch.setattr("nanobot.webui.settings_routes.update_model_configuration", update)
+    monkeypatch.setattr("nanobot.webui.settings_api.SettingsOperations.update_model", update)
     path = "/api/settings/model-configurations/update"
     request = _mutation_request(path, {"name": "openai", "new_name": "Codex"})
 
