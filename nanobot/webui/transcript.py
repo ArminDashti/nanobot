@@ -29,6 +29,11 @@ from nanobot.session.automation_turns import is_automation_kind
 from nanobot.session.history_visibility import is_hidden_history_message
 from nanobot.session.manager import Session, SessionManager
 from nanobot.utils.helpers import atomic_write_lines
+from nanobot.utils.public_tool_activity import (
+    project_stored_tool_activity,
+    public_activity_batches,
+    public_activity_hint,
+)
 from nanobot.webui.metadata import WEBUI_MESSAGE_SOURCE_METADATA_KEY, WEBUI_TURN_METADATA_KEY
 from nanobot.webui.outbound_wire import project_tool_events
 from nanobot.webui.session_identity import webui_chat_id, webui_session_key
@@ -47,6 +52,8 @@ _MAX_TRANSCRIPT_PAGE_LIMIT = 1000
 _MAX_TRANSCRIPT_PAGE_RECORDS = 4_000
 _MAX_TRANSCRIPT_PAGE_BYTES = 20 * 1024 * 1024
 _MAX_INLINE_TRACE_DETAIL_BYTES = 32 * 1024
+_ACTIVITY_MESSAGE_KINDS = {"tool_hint", "progress", "execution"}
+_NON_ANSWER_MESSAGE_KINDS = _ACTIVITY_MESSAGE_KINDS | {"reasoning"}
 _MANIFEST_REBUILD_LOCKS = tuple(threading.Lock() for _ in range(32))
 _ACTIVE_TRANSCRIPTS_WITH_DELTAS: set[str] = set()
 _WEBUI_TURN_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
@@ -265,6 +272,7 @@ class _DeferredTraceGroup(NamedTuple):
     stop: int
     detail_bytes: int
     trace_count: int
+    last_text: str
 
 
 @dataclass(slots=True)
@@ -1751,11 +1759,7 @@ def _transcript_turn_signature(records: list[dict[str, Any]]) -> tuple[str, ...]
                     stream_parts[:] = [final_text]
                 continue
             flush_stream(final_text)
-        elif event == "message" and record.get("kind") not in {
-            "tool_hint",
-            "progress",
-            "reasoning",
-        }:
+        elif event == "message" and record.get("kind") not in _NON_ANSWER_MESSAGE_KINDS:
             flush_stream()
             if signature := _assistant_text_signature(record.get("text")):
                 texts.append(signature)
@@ -1808,11 +1812,7 @@ def _is_recoverable_answer_record(record: dict[str, Any]) -> bool:
     event = record.get("event")
     if event in {"delta", "stream_end"}:
         return True
-    return event == "message" and record.get("kind") not in {
-        "tool_hint",
-        "progress",
-        "reasoning",
-    }
+    return event == "message" and record.get("kind") not in _NON_ANSWER_MESSAGE_KINDS
 
 
 def _needs_incomplete_turn_recovery(lines: list[dict[str, Any]]) -> bool:
@@ -1898,6 +1898,8 @@ def _format_tool_call_trace(call: Any) -> str | None:
     if not call or not isinstance(call, dict):
         return None
     call_data = cast(dict[str, Any], call)
+    if call_data.get("activity") == "execution":
+        return None
     fn = call_data.get("function")
     function_data = cast(dict[str, Any], fn) if isinstance(fn, dict) else None
     name = function_data.get("name") if function_data is not None else None
@@ -2039,7 +2041,7 @@ def has_pending_tool_calls(
         if ev == "user":
             return False
         if ev == "message":
-            return rec.get("kind") in {"tool_hint", "progress", "reasoning"}
+            return rec.get("kind") in _NON_ANSWER_MESSAGE_KINDS
         if ev in {
             "delta",
             "stream_end",
@@ -2098,7 +2100,7 @@ def build_webui_trace_detail_response(
     if turn is None:
         return None
     turn, _ = _compact_completed_stream_deltas(turn)
-    lines = _records_with_replay_identity(turn, turn_ordinal=ordinal)
+    lines = _project_stored_activity_records(_records_with_replay_identity(turn, turn_ordinal=ordinal))
     for group in _client_projection_deferred_trace_groups(lines).values():
         first = lines[group.start]
         if _client_projection_event_id(first) != message_id:
@@ -2170,6 +2172,38 @@ def _client_projection_source(record: dict[str, Any]) -> dict[str, Any] | None:
     return projected
 
 
+def _project_stored_activity_records(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Split mixed stored activity into stable public siblings without rewriting it."""
+    visible: list[dict[str, Any]] = []
+    for record in lines:
+        kind = record.get("kind")
+        if record.get("event") != "message" or kind not in _ACTIVITY_MESSAGE_KINDS:
+            visible.append(record)
+            continue
+        text = record.get("text")
+        content, tools, changed = project_stored_tool_activity(
+            text if isinstance(text, str) else "", _normalize_tool_events(record.get("tool_events")),
+            legacy_text_hint=kind == "tool_hint",
+        )
+        if changed and not content and not tools:
+            continue
+        batches = list(public_activity_batches(tools))
+        if not batches:
+            visible.append({**record, "text": content} if changed else record)
+            continue
+        identity = record.get(_WEBUI_REPLAY_IDENTITY_KEY)
+        if len(batches) > 1 and not isinstance(identity, str):
+            identity = _stable_record_digest(record)
+        for part, (execution, batch) in enumerate(batches):
+            projected = {**record, "text": content, "tool_events": batch}
+            projected["kind"] = "execution" if execution else kind
+            if len(batches) > 1:
+                projected[_WEBUI_REPLAY_IDENTITY_KEY] = f"{identity}\0activity:{part}"
+                projected["text"] = public_activity_hint(batch)
+            visible.append(projected)
+    return visible
+
+
 def _client_projection_event(
     record: dict[str, Any],
     *,
@@ -2239,13 +2273,19 @@ def _client_projection_event(
     if event == "message":
         text = record.get("text")
         content = text if isinstance(text, str) else ""
+        kind = record.get("kind")
+        tool_events = _normalize_tool_events(record.get("tool_events"))
+        if kind in _ACTIVITY_MESSAGE_KINDS:
+            content, tool_events, changed = project_stored_tool_activity(
+                content, tool_events, legacy_text_hint=kind == "tool_hint",
+            )
+            if changed and not content and not tool_events:
+                return None
         if augment_assistant_text is not None:
             content = augment_assistant_text(content)
         projected = {"event": "message", **common, "text": content}
-        kind = record.get("kind")
-        if kind in {"tool_hint", "progress", "reasoning"}:
+        if kind in _NON_ANSWER_MESSAGE_KINDS:
             projected["kind"] = kind
-        tool_events = _normalize_tool_events(record.get("tool_events"))
         if tool_events:
             projected["tool_events"] = tool_events
         raw_media = record.get("media")
@@ -2329,9 +2369,11 @@ def _client_projection_deferred_trace_groups(
     start: int | None = None
     detail_bytes = 0
     trace_count = 0
+    last_text = ""
+    execution_calls: set[str] = set()
 
     def flush(stop: int) -> None:
-        nonlocal start, detail_bytes, trace_count
+        nonlocal start, detail_bytes, trace_count, last_text
         if (
             start is not None
             and detail_bytes > _MAX_INLINE_TRACE_DETAIL_BYTES
@@ -2340,16 +2382,19 @@ def _client_projection_deferred_trace_groups(
                 start=start,
                 stop=stop,
                 detail_bytes=detail_bytes,
-                trace_count=max(1, trace_count),
+                trace_count=trace_count,
+                last_text=last_text,
             )
         start = None
         detail_bytes = 0
         trace_count = 0
+        last_text = ""
+        execution_calls.clear()
 
     for index, record in enumerate(lines):
         is_activity = (
             record.get("event") == "message"
-            and record.get("kind") in {"tool_hint", "progress"}
+            and record.get("kind") in _ACTIVITY_MESSAGE_KINDS
         )
         if not is_activity:
             flush(index)
@@ -2361,17 +2406,28 @@ def _client_projection_deferred_trace_groups(
             augment_assistant_text=None,
         )
         if event is None:
-            flush(index)
             continue
+        if start is not None and (
+            (lines[start].get("kind") == "execution") != (record.get("kind") == "execution")
+        ):
+            flush(index)
         if start is None:
             start = index
         detail_bytes += len(_record_json_line(event).encode("utf-8"))
-        tool_events = _normalize_tool_events(record.get("tool_events"))
+        tool_events = _normalize_tool_events(event.get("tool_events"))
+        for item in tool_events:
+            if item.get("activity") == "execution" and item.get("counts_as_operation") is True:
+                key = str(item.get("call_id") or index)
+                if key not in execution_calls:
+                    execution_calls.add(key)
+                    trace_count += 1
         traces = tool_trace_lines_from_events(tool_events)
         if traces:
             trace_count += len(traces)
-        elif not tool_events and isinstance(record.get("text"), str) and record["text"]:
+        elif not tool_events and event.get("text"):
             trace_count += 1
+        if event.get("text"):
+            last_text = str(event["text"])
     flush(len(lines))
     return groups
 
@@ -2389,7 +2445,9 @@ def _client_projection_page_event_count(turn: list[dict[str, Any]]) -> int:
         "context_compaction",
         "turn_end",
     }
-    return max(1, sum(record.get("event") in supported for record in turn))
+    return max(1, sum(
+        record.get("event") in supported for record in _project_stored_activity_records(turn)
+    ))
 
 
 def _client_projection_events(
@@ -2401,6 +2459,7 @@ def _client_projection_events(
 ) -> tuple[list[dict[str, Any]], int | None]:
     events: list[dict[str, Any]] = []
     fork_boundary_event_index: int | None = None
+    lines = _project_stored_activity_records(lines)
     deferred_groups = _client_projection_deferred_trace_groups(lines)
     deferred_until = 0
     for index, record in enumerate(lines):
@@ -2421,18 +2480,11 @@ def _client_projection_events(
         group = deferred_groups.get(index)
         if group is not None:
             detail_ref = _trace_detail_ref(_client_projection_event_id(record), record)
-            last_text = next(
-                (
-                    text
-                    for grouped in reversed(lines[group.start:group.stop])
-                    if isinstance((text := grouped.get("text")), str) and text
-                ),
-                "",
-            )
-            event["text"] = _trace_summary(last_text)
+            event["text"] = _trace_summary(group.last_text)
             event.pop("tool_events", None)
             if detail_ref is not None:
-                event["trace_detail"] = {
+                detail_field = "execution_detail" if event.get("kind") == "execution" else "trace_detail"
+                event[detail_field] = {
                     "ref": detail_ref,
                     "bytes": group.detail_bytes,
                     "traceCount": group.trace_count,
@@ -2481,7 +2533,7 @@ def build_session_thread_response(
             tools = project_tool_events(_normalize_tool_events(message.get("tool_events")))
             if tools:
                 records.append({"event": "message", "kind": "tool_hint",
-                                "text": "\n".join(tool_trace_lines_from_events(tools)),
+                                "text": public_activity_hint(tools),
                                 "tool_events": tools})
             edits = message.get("file_edit_events")
             if isinstance(edits, list) and edits:
@@ -2503,7 +2555,7 @@ def build_session_thread_response(
         rows.append({"event": "turn_end", "chat_id": chat_id,
                      "turn_id": turn_id, "latency_ms": latency_ms,
                      _WEBUI_REPLAY_IDENTITY_KEY: f"session:{session.key}:end"})
-    events = [event for record in rows if (event := _client_projection_event(
+    events = [event for record in _project_stored_activity_records(rows) if (event := _client_projection_event(
         record, augment_user_media=augment_user_media, augment_assistant_media=augment_assistant_media,
         augment_assistant_text=augment_assistant_text,
     )) is not None]
