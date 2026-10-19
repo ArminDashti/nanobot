@@ -275,6 +275,7 @@ class _DeferredTraceGroup(NamedTuple):
     detail_bytes: int
     trace_count: int
     last_text: str
+    events: list[dict[str, Any]] | None
 
 
 @dataclass(slots=True)
@@ -2105,23 +2106,11 @@ def build_webui_trace_detail_response(
         return None
     turn, _ = _compact_completed_stream_deltas(turn)
     lines = list(_project_stored_activity_records(_records_with_replay_identity(turn, turn_ordinal=ordinal)))
-    for group in _client_projection_deferred_trace_groups(lines).values():
+    for group in _client_projection_deferred_trace_groups(lines, retain_detail_id=message_id).values():
         first = lines[group.start]
         if _client_projection_event_id(first) != message_id:
             continue
-        events = [
-            event
-            for record in lines[group.start:group.stop]
-            if (
-                event := _client_projection_event(
-                    record,
-                    augment_user_media=None,
-                    augment_assistant_media=None,
-                    augment_assistant_text=None,
-                )
-            ) is not None
-        ]
-        return {"message_id": message_id, "events": events}
+        return {"message_id": message_id, "events": cast(list[dict[str, Any]], group.events)}
     return None
 
 
@@ -2360,17 +2349,20 @@ def _client_projection_event(
 
 def _client_projection_deferred_trace_groups(
     lines: list[dict[str, Any]],
+    *,
+    retain_detail_id: str | None = None,
 ) -> dict[int, _DeferredTraceGroup]:
-    """Group oversized consecutive activity events behind one stable detail ref."""
+    """Group activity; retain wire events only for the requested detail group."""
     groups: dict[int, _DeferredTraceGroup] = {}
     start: int | None = None
     detail_bytes = 0
     trace_count = 0
     last_text = ""
     execution_calls: set[str] = set()
+    retained_events: list[dict[str, Any]] | None = None
 
     def flush(stop: int) -> None:
-        nonlocal start, detail_bytes, trace_count, last_text
+        nonlocal start, detail_bytes, trace_count, last_text, retained_events
         if (
             start is not None
             and detail_bytes > _MAX_INLINE_TRACE_DETAIL_BYTES
@@ -2381,7 +2373,9 @@ def _client_projection_deferred_trace_groups(
                 detail_bytes=detail_bytes,
                 trace_count=trace_count,
                 last_text=last_text,
+                events=retained_events,
             )
+        retained_events = None
         start = None
         detail_bytes = 0
         trace_count = 0
@@ -2410,6 +2404,10 @@ def _client_projection_deferred_trace_groups(
             flush(index)
         if start is None:
             start = index
+            if retain_detail_id is not None and _client_projection_event_id(record) == retain_detail_id:
+                retained_events = []
+        if retained_events is not None:
+            retained_events.append(event)
         detail_bytes += len(_record_json_line(event).encode("utf-8"))
         tool_events = _normalize_tool_events(event.get("tool_events"))
         for item in tool_events:
