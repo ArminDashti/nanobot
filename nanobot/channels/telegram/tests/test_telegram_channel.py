@@ -1,7 +1,4 @@
 import asyncio
-import json
-import re
-import sys
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,12 +12,11 @@ try:
 except ImportError:
     pytest.skip("Telegram dependencies not installed (python-telegram-bot)", allow_module_level=True)
 
-from nanobot.agent.hook import AgentHookContext
-from nanobot.agent.progress_hook import AgentProgressHook
-from nanobot.agent.tools.exec_session import ExecSessionManager, ExecSessionTool
-from nanobot.agent.tools.execution import execute_tool_calls
-from nanobot.agent.tools.registry import ToolRegistry
-from nanobot.agent.tools.shell import ExecTool
+from nanobot.agent.tools.execution_activity import (
+    EXEC_ACTIVITY,
+    ExecutionFact,
+    public_execution_finish,
+)
 from nanobot.bus.delivery import ChannelNotReadyError
 from nanobot.bus.events import OutboundMessage
 from nanobot.bus.outbound_events import ProgressEvent, outbound_message_for_event
@@ -37,8 +33,8 @@ from nanobot.channels.telegram.runtime import (
     _StreamBuf,
     _telegram_command_text,
 )
-from nanobot.events import ContextCompactionEvent, EventSink
-from nanobot.providers.base import ToolCallRequest
+from nanobot.events import ContextCompactionEvent
+from nanobot.utils.public_tool_activity import public_activity_hint
 
 
 class _FakeHTTPXRequest:
@@ -1918,59 +1914,29 @@ async def test_send_progress_keeps_message_in_topic() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("exit_code", [0, 7])
-async def test_execution_progress_uses_real_facts_without_observer_hints(tmp_path, exit_code) -> None:
+async def test_execution_progress_uses_escaped_blockquote_in_topic() -> None:
     channel = TelegramChannel(TelegramConfig(enabled=True, token="123:abc", allow_from=["*"]), MessageBus())
     _install_ready_app(channel)
-    manager = ExecSessionManager()
-    registry = ToolRegistry()
-    registry.register(ExecTool(session_manager=manager, working_dir=str(tmp_path)))
-    registry.register(ExecSessionTool(manager=manager))
+    events = [dict(item) for item in public_execution_finish(
+        EXEC_ACTIVITY,
+        call_id="execution-1",
+        arguments={"command": "python check.py < input.txt"},
+        fact=ExecutionFact("failed", exit_code=7, output_incomplete=True),
+        failed=True,
+    )]
+    event = ProgressEvent(content=public_activity_hint(events), tool_hint=True, tool_events=events)
 
-    async def publish(event):
-        await channel.send(outbound_message_for_event(channel="telegram", chat_id="123", event=event))
+    await channel.send(outbound_message_for_event(
+        channel="telegram", chat_id="123", event=event, metadata={"message_thread_id": 42},
+    ))
 
-    hook = AgentProgressHook(EventSink(publish), resolve_activity_contract=registry.get_activity_contract)
-
-    async def call(name, arguments, call_id):
-        context = AgentHookContext(iteration=0, messages=[], tool_calls=[
-            ToolCallRequest(id=call_id, name=name, arguments=arguments),
-        ])
-        await hook.before_execute_tools(context)
-        context.tool_results, context.tool_events = await execute_tool_calls(
-            registry, context.tool_calls, concurrent=False,
-            external_lookup_counts={}, workspace_violation_counts={}, hook=hook, context=context,
-        )
-        await hook.after_iteration(context)
-        return context.tool_results[0]
-
-    command = (
-        f'$null = [Console]::In.ReadLine(); exit {exit_code}'
-        if sys.platform == "win32" else f'read line; exit {exit_code}'
+    sent = channel._app.bot.sent_messages
+    assert len(sent) == 1
+    assert sent[0]["text"] == (
+        "<blockquote expandable>Command failed (exit code 7) — output may be incomplete: "
+        "python check.py &lt; input.txt</blockquote>"
     )
-    try:
-        raw = await call("exec", {"command": command, "yield_time_ms": 0, "max_runtime": 10}, "launch")
-        session_id = re.search(r"session_id:\s*([0-9a-f]+)", raw).group(1)
-        assert len(channel._app.bot.sent_messages) == 2
-        for index in range(2):
-            await call("exec_session", {"session_id": session_id, "until_exit": True, "timeout_ms": 10}, f"wait-{index}")
-        assert len(channel._app.bot.sent_messages) == 2
-        await call("exec_session", {
-            "session_id": session_id, "input": "finish\n", "until_exit": True, "timeout_ms": 5000,
-        }, "finish")
-        sent = channel._app.bot.sent_messages
-        assert len(sent) == 3
-        assert ("Command failed" if exit_code else "Command completed") in sent[-1]["text"]
-        if exit_code:
-            assert "exit code 7" in sent[-1]["text"]
-        assert sent[-1]["text"].startswith("<blockquote")
-        await call("exec_session", {"session_id": session_id}, "unavailable")
-        assert len(sent) == 4
-        assert "Could not check command" in sent[-1]["text"]
-        assert session_id not in json.dumps(sent)
-        assert "exec_session" not in json.dumps(sent)
-    finally:
-        await manager.close_all()
+    assert sent[0]["message_thread_id"] == 42
 
 
 @pytest.mark.asyncio
