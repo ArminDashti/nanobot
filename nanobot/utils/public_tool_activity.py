@@ -75,24 +75,15 @@ def public_activity_batches(
 def public_activity_hint(events: list[dict[str, Any]], *, max_length: int = 40) -> str:
     """Derive text from exactly the items sent to structured consumers."""
     parts: list[str] = []
-    ordinary: list[ToolCallRequest] = []
-
-    def flush() -> None:
-        if ordinary:
-            parts.append(format_tool_hints(ordinary, max_length=max_length))
-            ordinary.clear()
-
-    for event in events:
-        if event.get("activity") == "execution":
-            flush()
-            parts.append(execution_activity_text(event))
+    for execution, batch in public_activity_batches(events):
+        if execution:
+            parts.extend(execution_activity_text(event) for event in batch)
         else:
-            arguments = event.get("arguments")
-            ordinary.append(ToolCallRequest(
+            calls = [ToolCallRequest(
                 id=str(event.get("call_id") or ""), name=str(event.get("name") or ""),
-                arguments=arguments if isinstance(arguments, dict) else {},
-            ))
-    flush()
+                arguments=event["arguments"] if isinstance(event.get("arguments"), dict) else {},
+            ) for event in batch]
+            parts.append(format_tool_hints(calls, max_length=max_length))
     return ", ".join(part for part in parts if part)
 
 

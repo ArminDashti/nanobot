@@ -28,7 +28,7 @@ from nanobot.bus.outbound_events import ProgressEvent
 from nanobot.events import EventSink
 from nanobot.providers.base import ToolCallRequest
 from nanobot.utils.progress_events import build_tool_event_finish_payloads
-from nanobot.utils.public_tool_activity import project_stored_tool_activity
+from nanobot.utils.public_tool_activity import project_stored_tool_activity, public_activity_hint
 
 
 async def run_call(registry, hook, name, arguments, call_id):
@@ -228,3 +228,12 @@ async def test_mixed_finish_keeps_each_delivery_class_separate():
     assert published[1].tool_hint is True
     assert published[1].tool_events[0]["state"] == "control_failed"
     assert "third-party result" not in published[1].content
+
+
+def test_public_hint_keeps_order_and_compacts_only_consecutive_ordinary_calls():
+    read = {"name": "read_file", "arguments": {"path": "a.py"}}
+    completed = {"activity": "execution", "state": "completed"}
+    failure = {"activity": "execution", "state": "control_failed", "operation": "stop"}
+    assert public_activity_hint([read, read, completed, read, failure]) == (
+        "read a.py × 2, Command completed, read a.py, Could not stop command"
+    )

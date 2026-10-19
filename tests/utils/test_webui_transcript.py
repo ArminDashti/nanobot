@@ -1640,3 +1640,33 @@ def test_execution_notice_keeps_a_turn_pending_until_real_turn_end():
     assert transcript_module.has_pending_tool_calls(records) is True
     records.append({"event": "turn_end"})
     assert transcript_module.has_pending_tool_calls(records) is False
+
+
+def test_dense_turn_projects_page_budget_only_once_before_full_delivery(tmp_path, monkeypatch):
+    monkeypatch.setattr("nanobot.config.paths.get_data_dir", lambda: tmp_path)
+    key = "websocket:dense-public-activity"
+    append_transcript_object(key, {"event": "user", "text": "read files"})
+    for index in range(80):
+        append_transcript_object(key, {
+            "event": "message", "kind": "tool_hint", "text": "read a.py",
+            "tool_events": [{"phase": "end", "name": "read_file", "call_id": str(index), "result": "file"}],
+        })
+    append_transcript_object(key, {"event": "message", "text": "done"})
+    append_transcript_object(key, {"event": "turn_end"})
+    projection = transcript_module.project_stored_tool_activity
+    calls = 0
+
+    def counted_projection(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return projection(*args, **kwargs)
+
+    monkeypatch.setattr(transcript_module, "project_stored_tool_activity", counted_projection)
+    response = build_webui_thread_response(key, limit=5)
+    assert calls <= 84  # Four activity rows reach the soft limit; delivery still projects all 80.
+    events = response["events"]
+    if activity := next((event for event in events if "trace_detail" in event), None):
+        events = build_webui_trace_detail_response(key, activity["trace_detail"]["ref"])["events"]
+    assert sum(len(event.get("tool_events", [])) for event in events) == 80
+    assert any(event.get("text") == "done" for event in response["events"])
+    assert response["page"]["has_more_before"] is False

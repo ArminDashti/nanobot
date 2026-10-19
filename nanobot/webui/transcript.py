@@ -13,9 +13,11 @@ import threading
 import time
 import uuid
 from collections import OrderedDict
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
+from itertools import islice
 from pathlib import Path
 from typing import Any, Callable, Mapping, NamedTuple, NotRequired, Sequence, TypedDict, cast
 from urllib.parse import unquote, urlparse
@@ -1031,7 +1033,9 @@ def _select_transcript_page(
             selected.append(_TranscriptTurnRef(ordinal, turn, trace_details_safe))
             selected_record_count += turn_record_count
             selected_bytes += turn_bytes
-            selected_event_count += _client_projection_page_event_count(turn)
+            selected_event_count += _client_projection_page_event_count(
+                turn, limit=page_limit - selected_event_count,
+            )
             if selected_event_count >= page_limit:
                 break
         if selected_event_count >= page_limit or budget_reached:
@@ -2100,7 +2104,7 @@ def build_webui_trace_detail_response(
     if turn is None:
         return None
     turn, _ = _compact_completed_stream_deltas(turn)
-    lines = _project_stored_activity_records(_records_with_replay_identity(turn, turn_ordinal=ordinal))
+    lines = list(_project_stored_activity_records(_records_with_replay_identity(turn, turn_ordinal=ordinal)))
     for group in _client_projection_deferred_trace_groups(lines).values():
         first = lines[group.start]
         if _client_projection_event_id(first) != message_id:
@@ -2172,13 +2176,12 @@ def _client_projection_source(record: dict[str, Any]) -> dict[str, Any] | None:
     return projected
 
 
-def _project_stored_activity_records(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Split mixed stored activity into stable public siblings without rewriting it."""
-    visible: list[dict[str, Any]] = []
+def _project_stored_activity_records(lines: list[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+    """Yield stable public siblings; soft page counting need not project the tail."""
     for record in lines:
         kind = record.get("kind")
         if record.get("event") != "message" or kind not in _ACTIVITY_MESSAGE_KINDS:
-            visible.append(record)
+            yield record
             continue
         text = record.get("text")
         content, tools, changed = project_stored_tool_activity(
@@ -2187,10 +2190,10 @@ def _project_stored_activity_records(lines: list[dict[str, Any]]) -> list[dict[s
         )
         if changed and not content and not tools:
             continue
-        batches = list(public_activity_batches(tools))
-        if not batches:
-            visible.append({**record, "text": content} if changed else record)
+        if not tools or (not changed and not any(tool.get("activity") == "execution" for tool in tools)):
+            yield {**record, "text": content} if changed else record
             continue
+        batches = list(public_activity_batches(tools))
         identity = record.get(_WEBUI_REPLAY_IDENTITY_KEY)
         if len(batches) > 1 and not isinstance(identity, str):
             identity = _stable_record_digest(record)
@@ -2200,8 +2203,7 @@ def _project_stored_activity_records(lines: list[dict[str, Any]]) -> list[dict[s
             if len(batches) > 1:
                 projected[_WEBUI_REPLAY_IDENTITY_KEY] = f"{identity}\0activity:{part}"
                 projected["text"] = public_activity_hint(batch)
-            visible.append(projected)
-    return visible
+            yield projected
 
 
 def _client_projection_event(
@@ -2211,6 +2213,7 @@ def _client_projection_event(
     augment_assistant_media: Callable[[list[str]], list[dict[str, Any]]] | None,
     augment_assistant_text: Callable[[str], str] | None,
 ) -> dict[str, Any] | None:
+    """Serialize a record after stored activity projection has resolved visibility."""
     event = record.get("event")
     common = _client_projection_common_fields(record)
     if event in {"delta", "stream_end", "message"} and "response_sources" in record:
@@ -2275,12 +2278,6 @@ def _client_projection_event(
         content = text if isinstance(text, str) else ""
         kind = record.get("kind")
         tool_events = _normalize_tool_events(record.get("tool_events"))
-        if kind in _ACTIVITY_MESSAGE_KINDS:
-            content, tool_events, changed = project_stored_tool_activity(
-                content, tool_events, legacy_text_hint=kind == "tool_hint",
-            )
-            if changed and not content and not tool_events:
-                return None
         if augment_assistant_text is not None:
             content = augment_assistant_text(content)
         projected = {"event": "message", **common, "text": content}
@@ -2432,7 +2429,7 @@ def _client_projection_deferred_trace_groups(
     return groups
 
 
-def _client_projection_page_event_count(turn: list[dict[str, Any]]) -> int:
+def _client_projection_page_event_count(turn: list[dict[str, Any]], *, limit: int | None = None) -> int:
     """Apply the soft page limit in canonical protocol events, not UI rows."""
     supported = {
         "user",
@@ -2445,9 +2442,8 @@ def _client_projection_page_event_count(turn: list[dict[str, Any]]) -> int:
         "context_compaction",
         "turn_end",
     }
-    return max(1, sum(
-        record.get("event") in supported for record in _project_stored_activity_records(turn)
-    ))
+    events = (record for record in _project_stored_activity_records(turn) if record.get("event") in supported)
+    return max(1, sum(1 for _ in islice(events, limit)))
 
 
 def _client_projection_events(
@@ -2459,7 +2455,7 @@ def _client_projection_events(
 ) -> tuple[list[dict[str, Any]], int | None]:
     events: list[dict[str, Any]] = []
     fork_boundary_event_index: int | None = None
-    lines = _project_stored_activity_records(lines)
+    lines = list(_project_stored_activity_records(lines))
     deferred_groups = _client_projection_deferred_trace_groups(lines)
     deferred_until = 0
     for index, record in enumerate(lines):
