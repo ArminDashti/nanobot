@@ -30,6 +30,7 @@ from nanobot.session.automation_turns import is_automation_kind
 from nanobot.session.history_visibility import is_hidden_history_message
 from nanobot.session.manager import Session, SessionManager
 from nanobot.utils.helpers import atomic_write_lines
+from nanobot.webui.history_replacement import guarded_transcript
 from nanobot.webui.metadata import WEBUI_MESSAGE_SOURCE_METADATA_KEY, WEBUI_TURN_METADATA_KEY
 from nanobot.webui.outbound_wire import project_tool_events
 from nanobot.webui.session_identity import webui_chat_id, webui_session_key
@@ -194,6 +195,7 @@ def _legacy_webui_thread_path(session_key: str) -> Path:
     return get_webui_dir() / f"{stem}.json"
 
 
+@guarded_transcript
 def webui_transcript_revision(
     session_key: str,
     *,
@@ -1073,6 +1075,7 @@ def _select_transcript_page(
     return lines, page
 
 
+@guarded_transcript
 def read_transcript_lines(session_key: str) -> list[dict[str, Any]]:
     lines: list[dict[str, Any]] = []
     for chunk_id in _chunk_ids(session_key):
@@ -1133,6 +1136,7 @@ def _compact_active_completed_streams(session_key: str) -> None:
         _write_records_to_path(path, _flatten_turns(turns))
 
 
+@guarded_transcript
 def append_transcript_object(session_key: str, obj: dict[str, Any]) -> None:
     record = _record_for_append(obj)
     _append_to_active_transcript(session_key, record)
@@ -1334,6 +1338,40 @@ def _is_user_transcript_row(row: dict[str, Any]) -> bool:
     return row.get("event") == "user" or row.get("role") == "user"
 
 
+def transcript_prefix_before_user_index(
+    lines: list[dict[str, Any]], before_user_index: int,
+) -> list[dict[str, Any]] | None:
+    """Build a display prefix independently of new/replace target ownership."""
+    if before_user_index < 0:
+        return None
+    copied: list[dict[str, Any]] = []
+    user_index = 0
+    for row in lines:
+        if _is_user_transcript_row(row):
+            if user_index == before_user_index:
+                return copied
+            user_index += 1
+        copied.append(dict(row))
+    return copied if user_index == before_user_index else None
+
+
+def transcript_edit_target(
+    session_key: str, message_id: str, turn_id: str | None,
+) -> tuple[dict[str, Any], int] | None:
+    """Resolve a verifiable display identity and return its true global boundary."""
+    count = 0
+    matches: list[tuple[dict[str, Any], int]] = []
+    for ordinal, raw in enumerate(_split_transcript_turns(read_transcript_lines(session_key))):
+        turn, _ = _compact_completed_stream_deltas(raw)
+        for row in _records_with_replay_identity(turn, turn_ordinal=ordinal):
+            if not _is_user_transcript_row(row):
+                continue
+            if _client_projection_event_id(row) == message_id or (turn_id and row.get("turn_id") == turn_id):
+                matches.append((row, count))
+            count += 1
+    return matches[0] if len(matches) == 1 else None
+
+
 def fork_transcript_before_user_index(
     source_key: str,
     target_key: str,
@@ -1350,28 +1388,14 @@ def fork_transcript_before_user_index(
     if not lines:
         return False
 
-    target_chat_id = _chat_id_from_session_key(target_key)
-    copied: list[dict[str, Any]] = []
-    user_index = 0
-    found_target = False
-    for row in lines:
-        if row.get("event") == WEBUI_FORK_MARKER_EVENT:
-            continue
-        if _is_user_transcript_row(row):
-            if user_index == before_user_index:
-                found_target = True
-                break
-            user_index += 1
-        dup = json.loads(json.dumps(row, ensure_ascii=False))
-        if target_chat_id is not None:
-            dup["chat_id"] = target_chat_id
-        copied.append(dup)
-    if user_index == before_user_index:
-        found_target = True
-
-    if not found_target:
+    prefix = transcript_prefix_before_user_index(lines, before_user_index)
+    if prefix is None:
         return False
-
+    target_chat_id = _chat_id_from_session_key(target_key)
+    copied = [
+        {**row, **({"chat_id": target_chat_id} if target_chat_id is not None else {})}
+        for row in prefix if row.get("event") != WEBUI_FORK_MARKER_EVENT
+    ]
     _write_transcript_lines(target_key, copied)
     return True
 
@@ -2067,6 +2091,7 @@ def completed_turn_ids(lines: list[dict[str, Any]]) -> list[str]:
     return completed
 
 
+@guarded_transcript
 def build_webui_trace_detail_response(
     session_key: str,
     detail_ref: str,
@@ -2495,6 +2520,7 @@ def build_session_thread_response(
             "active_turn_id": turn_id if active else None}
 
 
+@guarded_transcript
 def build_webui_thread_response(
     session_key: str,
     *,
@@ -2800,6 +2826,7 @@ class PromptIndexResponse(TypedDict):
     revision: NotRequired[str | None]
 
 
+@guarded_transcript
 def prompt_index_response(
     session_key: str,
     previous_revision: str | None,

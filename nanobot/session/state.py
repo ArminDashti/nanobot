@@ -7,6 +7,7 @@ import sqlite3
 import threading
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from contextvars import copy_context
 from copy import deepcopy
 from dataclasses import fields, replace
@@ -14,6 +15,12 @@ from datetime import datetime
 from typing import Any, TypeVar, cast
 
 from nanobot.bus.events import InboundMessage
+from nanobot.session.history_edit import (
+    HistoryEditAnchor,
+    HistoryEditError,
+    HistoryEditProjection,
+    ordinary_text_error,
+)
 from nanobot.session.keys import is_dream_session
 from nanobot.session.manager import Session, SessionIdentity, SessionPolicy, fork_session
 from nanobot.session.model_selection import SESSION_MODEL_PRESET_METADATA_KEY
@@ -932,8 +939,11 @@ class SessionState:
 
     async def fork(
         self, source_key: str, target_key: str, before_user_index: int,
-        *, title: str | None = None,
+        *, title: str | None = None, projection: Callable[[Session], None] | None = None,
     ) -> Session | None:
+        if source_key == target_key:
+            raise ValueError("new fork requires a different target session")
+
         def commit() -> Session | None:
             def write() -> Session | None:
                 source = self._load(source_key)
@@ -944,6 +954,8 @@ class SessionState:
                     return None
                 if title:
                     target.metadata["title"] = title
+                if projection is not None:
+                    projection(target)
                 self._commit(target)
                 return target
 
@@ -957,6 +969,55 @@ class SessionState:
             commit,
             operation_name="fork",
         )
+
+    async def replace_user_input(
+        self, key: str, anchor: HistoryEditAnchor, message: InboundMessage,
+        projection: HistoryEditProjection,
+    ) -> Session:
+        """Accept a replacement and its input together; revoke every old draft."""
+        from uuid import uuid4
+
+        if reason := ordinary_text_error({"role": "user", "content": message.content}):
+            raise HistoryEditError(reason)
+
+        def commit() -> Session:
+            with ExitStack() as projections:
+                def write() -> Session:
+                    current = self._load(key)
+                    if current is None or not current.policy.persist:
+                        raise HistoryEditError("edit_source_changed")
+                    boundary = anchor.locate(current)
+                    if any(current.metadata.get(name) for name in _RESERVED_KEYS):
+                        raise HistoryEditError("edit_session_busy")
+                    previous_generation = current.generation
+                    current.messages = current.messages[:boundary]
+                    if current.last_archived >= boundary:
+                        current.last_archived = 0
+                        current.metadata.pop("_last_summary", None)
+                    current.provider_state = None
+                    for name in ("webui_recovery", "_last_usage", "request_origin", "goal_state", "thread_goal"):
+                        current.metadata.pop(name, None)
+                    current.generation = uuid4().hex
+                    current.add_message(
+                        "user", message.content, timestamp=message.timestamp.isoformat(),
+                        webui_turn_id=message.metadata["webui_turn_id"],
+                    )
+                    current.metadata[_PENDING_KEY] = True
+                    current.metadata["history_edit_receipt"] = {
+                        "turn_id": message.metadata["webui_turn_id"],
+                        "source_generation": anchor.generation,
+                        "source_revision": anchor.revision,
+                        "text": message.content,
+                    }
+                    projections.enter_context(projection(current))
+                    self._store.replace_generation(current, previous_generation=previous_generation)
+                    return current
+
+                current = self._store.run_write(write)
+                self._publish(current)
+            return self._draft(current)
+
+        return await self._execute(key, commit, operation_name="replace_user_input")
 
     async def delete(
         self,

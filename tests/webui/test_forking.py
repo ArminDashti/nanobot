@@ -13,7 +13,11 @@ async def test_create_fork_rebuilds_missing_transcript_and_saves_clean_title(
 ) -> None:
     forked = SimpleNamespace(messages=[{"role": "user", "content": "hello"}], metadata={})
     manager = MagicMock()
-    manager.state.fork = AsyncMock(return_value=forked)
+    async def fork_source(*_args, projection, **_kwargs):
+        projection(forked)
+        return forked
+
+    manager.state.fork = AsyncMock(side_effect=fork_source)
     rebuild = MagicMock()
     marker = MagicMock()
     monkeypatch.setattr(forking.uuid, "uuid4", lambda: "fork-id")
@@ -34,6 +38,7 @@ async def test_create_fork_rebuilds_missing_transcript_and_saves_clean_title(
         "websocket:fork-id",
         2,
         title="Useful fork",
+        projection=ANY,
     )
     rebuild.assert_called_once_with("websocket:fork-id", forked.messages)
     marker.assert_called_once_with("websocket:fork-id")
@@ -43,7 +48,12 @@ async def test_create_fork_rolls_back_session_and_transcript_together(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     manager = MagicMock()
-    manager.state.fork = AsyncMock(return_value=SimpleNamespace(messages=[], metadata={}))
+    async def fork_source(*_args, projection, **_kwargs):
+        forked = SimpleNamespace(messages=[], metadata={})
+        projection(forked)
+        return forked
+
+    manager.state.fork = AsyncMock(side_effect=fork_source)
     manager.state.delete = AsyncMock()
     delete_transcript = MagicMock()
     monkeypatch.setattr(forking.uuid, "uuid4", lambda: "failed-fork")

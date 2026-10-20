@@ -74,6 +74,7 @@ import type {
 import { projectThreadEvents } from "@/lib/thread-event-projection";
 import { projectWebuiThreadMessages } from "@/lib/thread-display-projection";
 import { ThreadMessageCache } from "@/lib/thread-message-cache";
+import { MessageEditingProvider } from "@/components/thread/MessageEditing";
 import { canonicalRunSnapshot, completedAssistantTurnIds } from "@/lib/canonical-run-snapshot";
 import { providerDisplayLabel } from "@/lib/provider-brand";
 import { cn } from "@/lib/utils";
@@ -795,6 +796,7 @@ export function ThreadShell({
     continuity: historyContinuity,
     lineage: historyLineage,
     activeTurnId: historyActiveTurnId,
+    historyGeneration,
     refresh: refreshHistory,
     version: historyVersion,
     forkBoundaryMessageCount,
@@ -893,6 +895,7 @@ export function ThreadShell({
   );
   const completedCanonicalHydrateVersionRef = useRef<Map<string, number>>(new Map());
   const committedHistoryLineageRef = useRef<Map<string, number>>(new Map());
+  const committedHistoryGenerationRef = useRef<Map<string, string>>(new Map());
   const sessionKeyByChatIdRef = useRef<Map<string, string>>(new Map());
   const traceDetailRequestsRef = useRef<Map<string, Promise<void>>>(new Map());
   const activeHistoryKeyRef = useRef(historyKey);
@@ -938,7 +941,7 @@ export function ThreadShell({
     chatId, initial, hasPendingToolCalls, handleTurnEnd, handleStreamDetach, completedTurnIds,
   );
   const displayMessages = useMemo(() => projectWebuiThreadMessages(messages), [messages]);
-  const promptNavigation = usePromptHistory(historyKey, historyVersion, displayMessages);
+  const promptNavigation = usePromptHistory(historyKey, historyVersion, displayMessages, historyGeneration);
   const updateNavigationMessages = promptNavigation.updateMessages;
 
   const loadTraceDetails = useCallback(async (refs: string[]) => {
@@ -946,7 +949,7 @@ export function ThreadShell({
     if (!requestKey) return;
     const requests: Promise<void>[] = [];
     for (const ref of refs) {
-      const requestId = `${requestKey}:${ref}`;
+      const requestId = `${requestKey}:${historyGeneration ?? ""}:${ref}`;
       const existing = traceDetailRequestsRef.current.get(requestId);
       if (existing) {
         requests.push(existing);
@@ -954,7 +957,9 @@ export function ThreadShell({
       }
       const request = fetchWebuiThreadTraceDetail(getToken(), requestKey, ref)
         .then((detail) => {
-          if (activeHistoryKeyRef.current !== requestKey) return;
+          if (activeHistoryKeyRef.current !== requestKey || client.isRetiredHistorySnapshot?.(
+            chatId ?? "", { history_generation: historyGeneration ?? undefined },
+          )) return;
           const projected = projectThreadEvents(detail.events);
           const hydrate = (current: UIMessage[]) => current.flatMap((message) => {
             if (message.traceDetail?.ref !== ref) return [message];
@@ -967,7 +972,9 @@ export function ThreadShell({
           updateNavigationMessages(hydrate);
         })
         .catch((error: unknown) => {
-          if (activeHistoryKeyRef.current !== requestKey) return;
+          if (activeHistoryKeyRef.current !== requestKey || client.isRetiredHistorySnapshot?.(
+            chatId ?? "", { history_generation: historyGeneration ?? undefined },
+          )) return;
           throw error;
         })
         .finally(() => {
@@ -977,7 +984,7 @@ export function ThreadShell({
       requests.push(request);
     }
     await Promise.all(requests);
-  }, [getToken, historyKey, setMessages, updateNavigationMessages]);
+  }, [getToken, historyKey, historyGeneration, chatId, client, setMessages, updateNavigationMessages]);
 
   useEffect(() => () => {
     activeHistoryKeyRef.current = null;
@@ -1285,6 +1292,18 @@ export function ThreadShell({
 
   useEffect(() => {
     if (!historyKey || !chatId || loading) return;
+    const previousGeneration = committedHistoryGenerationRef.current.get(chatId);
+    if (historyGeneration) committedHistoryGenerationRef.current.set(chatId, historyGeneration);
+    if (previousGeneration && historyGeneration && previousGeneration !== historyGeneration) {
+      // The transport already applied the replacement snapshot before forwarding
+      // new-generation frames. Shortened history is authoritative at this fence.
+      pendingCanonicalHydrateRef.current.delete(chatId);
+      pendingCanonicalCommitRef.current.delete(chatId);
+      pendingHistoryLineageCommitRef.current.delete(chatId);
+      committedHistoryLineageRef.current.set(chatId, historyLineage);
+      messageCacheRef.current.delete(chatId);
+      return;
+    }
     const pendingCanonicalHydrate = pendingCanonicalHydrateRef.current.get(chatId);
     const shouldReconcileRun = (
       pendingCanonicalHydrate !== undefined
@@ -1410,6 +1429,7 @@ export function ThreadShell({
     historyVersion,
     historyContinuity,
     historyLineage,
+    historyGeneration,
     historyActiveTurnId,
     hasPendingToolCalls,
     historyKey,
@@ -2075,6 +2095,12 @@ export function ThreadShell({
         >
           <FileActionsProvider value={previewSessionKey ? fileActions : undefined}>
           <WebPreviewContext.Provider value={previewSessionKey ? openWebPreview : undefined}>
+          <MessageEditingProvider chatId={chatId} busy={turnActive}
+            onBegin={(messageId) => {
+              viewportRef.current?.cancelAutoScroll();
+              viewportRef.current?.jumpToUserPrompt(messageId);
+            }}
+            enabled={!temporary && messagesReady && webuiCapabilities.includes("webui.chat.edit.v1")}>
           <ThreadViewport
             ref={viewportRef}
             messages={displayMessages}
@@ -2106,6 +2132,7 @@ export function ThreadShell({
             onForkFromMessage={onForkChat ? handleForkFromMessage : undefined}
             onQuoteSelection={session ? handleQuoteSelection : undefined}
           />
+          </MessageEditingProvider>
           </WebPreviewContext.Provider>
           </FileActionsProvider>
         </FilePreviewAvailabilityProvider>

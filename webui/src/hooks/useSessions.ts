@@ -154,6 +154,7 @@ interface SessionHistoryState {
   continuity: SessionHistoryContinuity;
   lineage: number;
   activeTurnId: string | null;
+  historyGeneration: string | null;
 }
 
 function emptyHistoryState(key: string | null, loading = false): SessionHistoryState {
@@ -175,6 +176,7 @@ function emptyHistoryState(key: string | null, loading = false): SessionHistoryS
     continuity: "initial",
     lineage: 0,
     activeTurnId: null,
+    historyGeneration: null,
   };
 }
 
@@ -203,6 +205,7 @@ function cachedHistoryState(
     continuity: "initial",
     lineage: version,
     activeTurnId: typeof body.active_turn_id === "string" ? body.active_turn_id : null,
+    historyGeneration: body.history_generation ?? null,
   };
 }
 
@@ -417,6 +420,7 @@ export function useSessionHistory(key: string | null): {
   lineage: number;
   /** Exact active turn when supplied by a current gateway. */
   activeTurnId: string | null;
+  historyGeneration: string | null;
 } {
   const { client, getToken } = useClient();
   const loadingOlderRef = useRef(false);
@@ -475,7 +479,9 @@ export function useSessionHistory(key: string | null): {
       const hasPending = hasPendingToolCallsFromThread(body, ui);
       const forkBoundary = projected.forkBoundaryMessageCount;
       setState((prev) => {
-        const merged = prev.key === key
+        const generationChanged = !!body?.history_generation && prev.historyGeneration !== null
+          && prev.historyGeneration !== body.history_generation;
+        const merged = prev.key === key && !generationChanged
           ? mergeLatestHistory(prev.messages, ui, prev.lineage === 0)
           : mergeLatestHistory([], ui, true);
         const retainedPrefix = merged.retainedPrefixLength > 0;
@@ -516,12 +522,16 @@ export function useSessionHistory(key: string | null): {
           lineage: merged.continuity === "overlap"
             ? prev.lineage
             : responseVersion,
+          historyGeneration: body?.history_generation ?? null,
           activeTurnId: typeof body?.active_turn_id === "string"
             ? body.active_turn_id
             : null,
         };
       });
     };
+    const unsubscribeReplacements = client.onChat(key.slice("websocket:".length), (event) => {
+      if (event.event === "history_replaced") webuiThreadCache.set(key, event.thread);
+    });
     let publishingBody = false;
     const unsubscribeCache = webuiThreadCache.subscribe(key, (body) => {
       if (publishingBody) return;
@@ -572,6 +582,7 @@ export function useSessionHistory(key: string | null): {
       cancelled = true;
       controller.abort();
       unsubscribeCache();
+      unsubscribeReplacements();
     };
   }, [client, getToken, key, refreshSeq]);
 
@@ -671,6 +682,7 @@ export function useSessionHistory(key: string | null): {
       continuity: "initial",
       lineage: 0,
       activeTurnId: null,
+      historyGeneration: null,
     };
   }
 
@@ -695,6 +707,7 @@ export function useSessionHistory(key: string | null): {
       continuity: "initial",
       lineage: 0,
       activeTurnId: null,
+      historyGeneration: null,
     };
   }
 
@@ -716,5 +729,6 @@ export function useSessionHistory(key: string | null): {
     continuity: state.continuity,
     lineage: state.lineage,
     activeTurnId: state.activeTurnId,
+    historyGeneration: state.historyGeneration,
   };
 }

@@ -1163,6 +1163,19 @@ class GatewayHTTPHandler:
         )
 
     def _handle_webui_thread_get(
+        self, request: WsRequest, key: str, *, diagnostics: _WebUIThreadDiagnostics | None = None,
+    ) -> Response:
+        from nanobot.webui.history_replacement import transcript_access
+
+        decoded = _decode_api_key(key)
+        if decoded is None or not self.check_api_token(request):
+            return self._handle_webui_thread_snapshot(request, key, diagnostics=diagnostics)
+        # The owner holds this same lock across display installation and SQL
+        # commit. Do not label an old display page with the new generation.
+        with transcript_access(decoded):
+            return self._handle_webui_thread_snapshot(request, key, diagnostics=diagnostics)
+
+    def _handle_webui_thread_snapshot(
         self,
         request: WsRequest,
         key: str,
@@ -1257,7 +1270,9 @@ class GatewayHTTPHandler:
         if data is None:
             return _http_error(404, "webui thread not found")
         data["workspace_scope"] = scope.payload()
-        revision_variant["session_version"] = self._read_session_version(decoded_key)
+        version = self._read_session_version(decoded_key)
+        data["history_generation"] = version[0] if version is not None else None
+        revision_variant["session_version"] = version
         final_revision = webui_transcript_revision(decoded_key, variant=revision_variant)
         response_headers = list(_NO_STORE_HEADERS)
         if final_revision is not None and final_revision == initial_revision:

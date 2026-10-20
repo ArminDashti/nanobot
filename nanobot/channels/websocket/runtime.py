@@ -10,9 +10,10 @@ import socket
 import ssl
 import uuid
 from contextlib import suppress
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Self, TypeGuard, cast
+from typing import TYPE_CHECKING, Any, Callable, Self, TypeGuard, cast
 from urllib.parse import urlsplit, urlunsplit
 from weakref import WeakSet
 
@@ -56,7 +57,7 @@ from nanobot.webui.outbound_wire import (
     WebUIWirePersistence,
     project_tool_events,
 )
-from nanobot.webui.session_identity import is_valid_webui_chat_id
+from nanobot.webui.session_identity import is_valid_webui_chat_id, webui_session_key
 from nanobot.webui.transcript import WEBUI_TRANSCRIPT_INCOMPLETE_KEY
 from nanobot.webui.websocket_logging import websockets_server_logger
 
@@ -1116,7 +1117,32 @@ class WebSocketChannel(BaseChannel):
         # Give an idle writer a chance to start without waiting for physical I/O.
         await asyncio.sleep(0)
 
-    def _persist_turn_transcript_event(
+    async def _persist_owned_event(
+        self, chat_id: str, event: dict[str, Any], metadata: dict[str, Any] | None,
+        write: Callable[[], bool],
+    ) -> bool:
+        from nanobot.webui.history_replacement import transcript_access
+
+        generation = (metadata or {}).get("_webui_history_generation") or self._outbound_generation.get()
+        if generation:
+            event["history_generation"] = generation
+
+        def commit() -> bool:
+            with transcript_access(webui_session_key(chat_id)):
+                if generation and self.gateway.session_manager is not None:
+                    current = self.gateway.session_manager.state.peek_identity(webui_session_key(chat_id))
+                    if current is None or current.generation != generation:
+                        return False
+                return write()
+        return await asyncio.to_thread(commit)
+
+    async def _persist_turn_transcript_event(self, chat_id: str, event: dict[str, Any], **kwargs: Any) -> bool:
+        return await self._persist_owned_event(
+            chat_id, event, kwargs.get("metadata"),
+            lambda: self._write_turn_transcript_event(chat_id, event, **kwargs),
+        )
+
+    def _write_turn_transcript_event(
         self,
         chat_id: str,
         event: dict[str, Any],
@@ -1127,6 +1153,8 @@ class WebSocketChannel(BaseChannel):
         transcript_overrides: dict[str, Any] | None = None,
     ) -> bool:
         """Persist one canonical turn event and retain unsafe owners on failure."""
+        if generation := self._outbound_generation.get():
+            event["history_generation"] = generation
         if (
             (metadata or {}).get(WEBUI_RESTART_CONTROL_METADATA_KEY) is True
             or not self._temporary_chats.should_persist_transcript(chat_id)
@@ -1166,7 +1194,19 @@ class WebSocketChannel(BaseChannel):
             )
         return persisted
 
-    def _persist_turn_stream_event(
+    async def _persist_turn_stream_event(self, chat_id: str, event: dict[str, Any], **kwargs: Any) -> bool:
+        # Deltas only allocate a sequence, while completed segments touch files.
+        if event.get("event") in {"delta", "reasoning_delta"}:
+            generation = (kwargs.get("metadata") or {}).get("_webui_history_generation")
+            if generation:
+                event["history_generation"] = generation
+            return self._write_turn_stream_event(chat_id, event, **kwargs)
+        return await self._persist_owned_event(
+            chat_id, event, kwargs.get("metadata"),
+            lambda: self._write_turn_stream_event(chat_id, event, **kwargs),
+        )
+
+    def _write_turn_stream_event(
         self,
         chat_id: str,
         event: dict[str, Any],
@@ -1197,8 +1237,25 @@ class WebSocketChannel(BaseChannel):
             phase=phase,
         )
 
+    _outbound_generation: ContextVar[str | None] = ContextVar("webui_outbound_generation", default=None)
+
     async def send(self, msg: OutboundMessage) -> None:
-        await self._outbound.send(msg)
+        delivery = msg.delivery
+        manager = self.gateway.session_manager
+        if delivery is not None and delivery.session_generation is not None and manager is not None:
+            current = manager.state.peek_identity(delivery.session_key)
+            if current is None:
+                session = await manager.state.read(delivery.session_key)
+                if session is None:
+                    return
+                current = manager.state.peek_identity(delivery.session_key)
+            if current is None or current.generation != delivery.session_generation:
+                return
+        token = self._outbound_generation.set(delivery.session_generation if delivery is not None else None)
+        try:
+            await self._outbound.send(msg)
+        finally:
+            self._outbound_generation.reset(token)
 
     async def send_projected_message(
         self,
@@ -1244,7 +1301,7 @@ class WebSocketChannel(BaseChannel):
         elif progress_event:
             payload["kind"] = "progress"
         phase = "activity" if payload.get("kind") in ("tool_hint", "progress") else "answer"
-        self._persist_turn_transcript_event(
+        await self._persist_turn_transcript_event(
             msg.chat_id,
             payload,
             metadata=msg.metadata,
@@ -1284,7 +1341,7 @@ class WebSocketChannel(BaseChannel):
             body["stream_id"] = stream_id
         stream_key = (chat_id, str(stream_id or ""))
         self._reasoning_text_buffers.setdefault(stream_key, []).append(delta)
-        self._persist_turn_stream_event(
+        await self._persist_turn_stream_event(
             chat_id,
             body,
             completed_text=None,
@@ -1315,7 +1372,7 @@ class WebSocketChannel(BaseChannel):
             body["stream_id"] = stream_id
         stream_key = (chat_id, str(stream_id or ""))
         reasoning_text = "".join(self._reasoning_text_buffers.pop(stream_key, []))
-        self._persist_turn_stream_event(
+        await self._persist_turn_stream_event(
             chat_id,
             body,
             completed_text=reasoning_text or None,
@@ -1340,7 +1397,7 @@ class WebSocketChannel(BaseChannel):
             "chat_id": chat_id,
             "edits": edits,
         }
-        self._persist_turn_transcript_event(
+        await self._persist_turn_transcript_event(
             chat_id,
             payload,
             metadata=metadata,
@@ -1394,7 +1451,7 @@ class WebSocketChannel(BaseChannel):
             body["resuming"] = True
         if stream_end and merge_next:
             body["merge_next"] = True
-        self._persist_turn_stream_event(
+        await self._persist_turn_stream_event(
             chat_id,
             body,
             completed_text=completed_text,
@@ -1421,7 +1478,7 @@ class WebSocketChannel(BaseChannel):
         conns = list(self._subs.get(chat_id, ()))
         body: dict[str, Any] = dict(payload)
         if persistence == "turn_activity":
-            self._persist_turn_transcript_event(
+            await self._persist_turn_transcript_event(
                 chat_id,
                 body,
                 metadata=metadata,
@@ -1433,7 +1490,7 @@ class WebSocketChannel(BaseChannel):
                 canonical_webui_turn
                 and websocket_turn_transcript_persistence_failed(chat_id, turn_owner)
             )
-            persisted = self._persist_turn_transcript_event(
+            persisted = await self._persist_turn_transcript_event(
                 chat_id,
                 body,
                 metadata=metadata,
@@ -1462,6 +1519,8 @@ class WebSocketChannel(BaseChannel):
         if not conns:
             return
         body = {"event": "goal_state", "chat_id": chat_id, "goal_state": blob}
+        if generation := self._outbound_generation.get():
+            body["history_generation"] = generation
         raw = json.dumps(body, ensure_ascii=False)
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" goal_state ")
@@ -1483,6 +1542,8 @@ class WebSocketChannel(BaseChannel):
             "chat_id": chat_id,
             "status": status,
         }
+        if generation := self._outbound_generation.get():
+            body["history_generation"] = generation
         if status == "running" and started_at is not None:
             body["started_at"] = started_at
         if turn_id:

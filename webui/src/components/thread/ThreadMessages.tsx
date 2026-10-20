@@ -10,6 +10,7 @@ import {
   formatActivityDuration,
 } from "@/components/thread/AgentActivityCluster";
 import { AssistantSelectionAction } from "@/components/thread/AssistantSelectionAction";
+import { InlineMessageEditor, useMessageEditing } from "@/components/thread/MessageEditing";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -108,6 +109,11 @@ export function ThreadMessages({
     () => buildDisplayUnits(messages),
     [messages],
   );
+  const editDraft = useMessageEditing()?.draft;
+  // A different browser may delete the selected row before local confirmation.
+  // Keep that unaccepted draft visible and cancellable outside the retired row.
+  const missingEditSource = editDraft && !editDraft.submitting
+    && !units.some((unit) => unit.type === "message" && unit.message.id === editDraft.message.id);
   const forkBoundaryAfterUnitIndex = useMemo(
     () => unitIndexAfterMessageCount(units, forkBoundaryMessageCount),
     [forkBoundaryMessageCount, units],
@@ -216,6 +222,7 @@ export function ThreadMessages({
           unit.type === "message" && unit.message.role === "user"
             ? unit.message.id
             : undefined;
+        const userIndex = userPromptId !== undefined ? nextUserIndex : undefined;
         const forkIndex =
           unit.type === "message" && unit.message.role === "assistant" && forkFlags[index]
             ? nextUserIndex
@@ -242,6 +249,7 @@ export function ThreadMessages({
             mobileActions={mobileActions}
             marginTop={marginTop}
             userPromptId={userPromptId}
+            userIndex={userIndex}
             hasBodyBelow={hasBodyBelow}
             suppressActivity={suppressActivity}
             showBlockContext={showBlockContext}
@@ -282,6 +290,9 @@ export function ThreadMessages({
           </Fragment>
         );
       })}
+      {missingEditSource ? <div className={cn("thread-message-row", units.length > 0 && "mt-5")}>
+        <InlineMessageEditor sourceMissing />
+      </div> : null}
       {afterMessages}
       {pendingActivity ? (
         <div className={cn("thread-message-row", units.length > 0 && "mt-5")}>
@@ -351,6 +362,7 @@ interface ThreadDisplayUnitProps {
   unit: DisplayUnit;
   marginTop: string;
   userPromptId?: string;
+  userIndex?: number;
   hasBodyBelow: boolean;
   suppressActivity: boolean;
   showBlockContext: boolean;
@@ -390,6 +402,8 @@ interface MessageBlockMenuProps {
   onOpenChange: (open: boolean) => void;
   onContextActiveChange: (key: string | null) => void;
   onForkFromHere?: () => void;
+  onEdit?: () => void;
+  editDisabledReason?: string | null;
   activity?: {
     label: string;
     expanded: boolean;
@@ -409,10 +423,13 @@ function MessageBlockMenu({
   onOpenChange,
   onContextActiveChange,
   onForkFromHere,
+  onEdit,
+  editDisabledReason,
   activity,
 }: MessageBlockMenuProps) {
   const { t } = useTranslation();
   const contentRef = useRef<HTMLDivElement>(null);
+  const editingRef = useRef(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const links = useMessageWebLinks(messageRoot, open);
   const [linksShown, setLinksShown] = useState(false);
@@ -445,6 +462,8 @@ function MessageBlockMenu({
     isTurnStreaming={isTurnStreaming}
     onForkFromHere={onForkFromHere ? () => { if (mobileActions) onOpenChange(false); onForkFromHere(); } : undefined}
     activity={activity}
+    onEdit={onEdit ? () => { editingRef.current = true; onOpenChange(false); onEdit(); } : undefined}
+    editDisabledReason={editDisabledReason}
     sheet={mobileActions}
     onViewLinks={links.length > 0 ? () => setLinksShown(true) : undefined}
   />;
@@ -461,7 +480,7 @@ function MessageBlockMenu({
         <DialogContent ref={contentRef} placement="bottom" aria-describedby={undefined}
           data-message-block-menu data-message-mobile-sheet data-message-context-menu-block={contextBlockKey}
           className="gap-2 p-4 pt-5 pb-[max(1rem,env(safe-area-inset-bottom))] outline-none"
-          onCloseAutoFocus={(event) => { if (activity?.expanded) event.preventDefault(); }}>
+          onCloseAutoFocus={(event) => { if (editingRef.current || activity?.expanded) event.preventDefault(); }}>
           <DialogTitle className="px-2 pb-2 pe-10 text-sm font-medium text-muted-foreground">{label}</DialogTitle>
           {actions}
         </DialogContent>
@@ -534,7 +553,7 @@ function MessageBlockMenu({
           contentRef.current?.focus({ preventScroll: true });
         }}
         onCloseAutoFocus={(event) => {
-          if (!contextActiveRef.current || activity?.expanded) event.preventDefault();
+          if (editingRef.current || !contextActiveRef.current || activity?.expanded) event.preventDefault();
         }}
         onPointerEnter={(event) => {
           if (event.pointerType === "touch") return;
@@ -561,6 +580,7 @@ const ThreadDisplayUnit = memo(function ThreadDisplayUnit({
   unit,
   marginTop,
   userPromptId,
+  userIndex,
   hasBodyBelow,
   suppressActivity,
   showBlockContext,
@@ -591,6 +611,10 @@ const ThreadDisplayUnit = memo(function ThreadDisplayUnit({
   const { t } = useTranslation();
   const elementRef = useRef<HTMLDivElement>(null);
   const activityDetailsId = useId();
+  const editing = useMessageEditing();
+  const isEditing = unit.type === "message" && editing?.draft?.message.id === unit.message.id;
+  const editMessage = unit.type === "message" && unit.message.role === "user" && userIndex !== undefined && editing
+    ? () => editing.begin(unit.message, userIndex) : undefined;
   const heightRef = useRef(0);
   const [nearViewport, setNearViewport] = useState(true);
   const [interacted, setInteracted] = useState(false);
@@ -659,6 +683,8 @@ const ThreadDisplayUnit = memo(function ThreadDisplayUnit({
       onOpenChange={(open) => onContextBlockMenuOpenChange(contextBlockKey, open)}
       onContextActiveChange={onContextBlockActiveChange}
       onForkFromHere={forkIndex !== undefined ? onForkFromHere : undefined}
+      onEdit={editMessage}
+      editDisabledReason={unit.type === "message" ? editing?.reason(unit.message) : null}
       activity={activityLabel ? {
         label: activityLabel,
         expanded: blockActivityExpanded,
@@ -742,7 +768,7 @@ const ThreadDisplayUnit = memo(function ThreadDisplayUnit({
                 />
               </div>
             ) : null}
-            <MessageBubble
+            {isEditing ? <InlineMessageEditor /> : <MessageBubble
               message={unit.message}
               temporary={temporary}
               cliApps={cliApps}
@@ -750,8 +776,8 @@ const ThreadDisplayUnit = memo(function ThreadDisplayUnit({
               slashCommands={slashCommands}
               onOpenFilePreview={onOpenFilePreview}
               contextMenu={unit.message.role === "user" && !mobileActions ? blockMenu : undefined}
-            />
-            {mobileActions ? blockMenu : null}
+            />}
+            {mobileActions && !isEditing ? blockMenu : null}
             {unit.message.role === "assistant"
             && unit.message.kind !== "compaction"
             && contextBlockKey === undefined ? (
@@ -777,6 +803,7 @@ function threadDisplayUnitPropsEqual(
     && previous.mobileActions === next.mobileActions
     && previous.marginTop === next.marginTop
     && previous.userPromptId === next.userPromptId
+    && previous.userIndex === next.userIndex
     && previous.hasBodyBelow === next.hasBodyBelow
     && previous.suppressActivity === next.suppressActivity
     && previous.showBlockContext === next.showBlockContext

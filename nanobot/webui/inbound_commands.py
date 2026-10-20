@@ -28,6 +28,7 @@ from nanobot.security.workspace_access import (
     WORKSPACE_SCOPE_METADATA_KEY,
     WorkspaceScopeError,
 )
+from nanobot.session.history_edit import HistoryEditError
 from nanobot.session.keys import session_key_for_channel
 from nanobot.session.webui_turns import (
     clear_websocket_turn_if_current,
@@ -45,7 +46,11 @@ from nanobot.webui.file_preview import (
     file_preview_payload,
     file_reference_payload,
 )
-from nanobot.webui.forking import handle_webui_fork_chat
+from nanobot.webui.forking import (
+    handle_webui_fork_chat,
+    prepare_webui_chat_edit,
+    replace_webui_chat_input,
+)
 from nanobot.webui.gateway_services import GatewayServices
 from nanobot.webui.mcp_presets_api import normalize_mcp_preset_mentions
 from nanobot.webui.metadata import (
@@ -200,6 +205,17 @@ class WebUICommandRouter:
             workspace_scope=scope.payload(),
         )
         await self._transport.webui_hydrate(fork_id)
+
+    async def announce_webui_history_replacement(
+        self, chat_id: str, body: dict[str, Any], *, retired_turn_ids: list[str], previous_generation: str,
+    ) -> None:
+        self._transport.webui_clear_stream_buffers(chat_id)
+        for connection in self._transport.webui_subscribers(chat_id):
+            await self._transport.webui_send_event(
+                connection, "history_replaced", chat_id=chat_id,
+                thread=body, retired_turn_ids=retired_turn_ids, previous_generation=previous_generation,
+            )
+        await self._transport.send_session_updated(chat_id, scope="thread")
 
     async def discard_owned_chat(
         self,
@@ -755,7 +771,7 @@ class WebUICommandRouter:
             if is_webui and not restart_control and (
                 temporary_policy is None or temporary_policy.persist_transcript
             ):
-                self._transcripts.append_user_message(
+                await asyncio.to_thread(self._transcripts.append_user_message,
                     chat_id,
                     content,
                     metadata=metadata,
@@ -1071,6 +1087,16 @@ class WebUICommandRouter:
         try:
             lock = self.request_locks.setdefault(connection, asyncio.Lock())
             async with lock:
+                if action in {"chat.edit.prepare", "chat.fork"}:
+                    try:
+                        result = (
+                            await prepare_webui_chat_edit(self.gateway, payload)
+                            if action == "chat.edit.prepare"
+                            else await replace_webui_chat_input(self, payload)
+                        )
+                    except HistoryEditError as exc:
+                        return WebUIRequestResult(status=409, message=exc.code)
+                    return WebUIRequestResult(result=result)
                 response = await self._http_router.dispatch_webui_mutation(
                     connection,
                     action,

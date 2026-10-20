@@ -13,6 +13,7 @@ import {
   createThreadProjectionState,
   finalizeStreamedTurn,
   projectThreadEvent,
+  projectThreadEvents,
   resetThreadProjectionCursor,
   turnFieldsFromEvent,
 } from "@/lib/thread-event-projection";
@@ -569,6 +570,20 @@ export function useNanobotStream(
     if (!chatId) return;
 
     const handle = (ev: InboundEvent) => {
+      if (ev.event === "history_replaced") {
+        clearPendingStreamWork();
+        sideChannelTurnIdsRef.current.clear();
+        const replacement = projectThreadEvents(ev.thread.events);
+        projectionRef.current = createThreadProjectionState(replacement);
+        setMessages(replacement);
+        setRetryStatus(null);
+        setRecoveryState(null);
+        setGoalState(undefined);
+        setStreamError(null);
+        setIsStreaming(ev.thread.has_pending_tool_calls === true);
+        setRunStartedAt(ev.thread.has_pending_tool_calls ? Date.now() / 1000 : null);
+        return;
+      }
       if (ev.event === "error") {
         if (ev.detail === "message_too_big") {
           applyStreamError({
