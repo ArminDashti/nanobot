@@ -2300,34 +2300,92 @@ describe("NanobotClient", () => {
     );
   });
 
-  it("includes session mentions in outbound messages", () => {
+  it("sends handle text without a catalog and waits for the gateway receipt", async () => {
     const client = new NanobotClient({
       url: "ws://test",
       reconnect: false,
       socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
     });
     client.connect();
-    lastSocket().fakeOpen();
-
-    client.sendMessage("chat-current", "Use @pricing", undefined, {
-      sessionMentions: [{
-        name: "pricing",
-        session_key: "websocket:pricing",
-        title: "Pricing",
-      }],
-    });
-
-    expect(lastSocket().sent).toContain(JSON.stringify({
+    const socket = lastSocket();
+    socket.fakeOpen();
+    let accepted = false;
+    const delivery = client.sendTurn("chat-current", "Use @bime、@luma", undefined, { turnId: "text-turn" })
+      .then(() => { accepted = true; });
+    expect(socket.sent).toContain(JSON.stringify({
       type: "message",
       chat_id: "chat-current",
-      content: "Use @pricing",
-      session_mentions: [{
-        name: "pricing",
-        session_key: "websocket:pricing",
-        title: "Pricing",
-      }],
+      content: "Use @bime、@luma",
+      turn_id: "text-turn",
       webui: true,
     }));
+    await Promise.resolve();
+    expect(accepted).toBe(false);
+    socket.fakeMessage({ event: "message_accepted", chat_id: "chat-current", turn_id: "text-turn" });
+    await delivery;
+    expect(accepted).toBe(true);
+    client.close();
+  });
+
+  it("rejects text delivery when the gateway refuses the references", async () => {
+    const client = new NanobotClient({ url: "ws://test", reconnect: false,
+      socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket });
+    client.connect();
+    const socket = lastSocket(); socket.fakeOpen();
+    const delivery = client.sendTurn("chat-current", "@bime", undefined, { turnId: "rejected-text" });
+    socket.fakeMessage({ event: "error", chat_id: "chat-current", turn_id: "rejected-text",
+      detail: "message_rejected", reason: "too_many_session_mentions" });
+    await expect(delivery).rejects.toThrow("too_many_session_mentions");
+    client.close();
+  });
+
+  it("does not queue a rejected text send for execution after reconnect", async () => {
+    const client = new NanobotClient({ url: "ws://test", reconnect: true, maxBackoffMs: 10,
+      socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket });
+    client.connect();
+    lastSocket().fakeOpen();
+    lastSocket().fakeCloseWithCode(1006);
+    await expect(client.sendTurn("chat-current", "retained offline text", undefined, { turnId: "offline-turn" }))
+      .rejects.toThrow("connection is not open");
+    await vi.advanceTimersByTimeAsync(30_001);
+    const reconnected = lastSocket();
+    reconnected.fakeOpen();
+    expect(reconnected.sent.filter((frame) => JSON.parse(frame).type === "message")).toEqual([]);
+    expect(client.hasUnsettledRun("chat-current")).toBe(false);
+    client.close();
+  });
+
+  it("reports a gateway project rejection once without replacing its error kind", async () => {
+    const client = new NanobotClient({ url: "ws://test", reconnect: false,
+      socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket });
+    const onError = vi.fn(); client.onError(onError);
+    client.connect();
+    const socket = lastSocket(); socket.fakeOpen();
+    const delivery = client.sendTurn("chat-current", "Use @bime", undefined, { turnId: "project-turn" });
+    socket.fakeMessage({ event: "error", chat_id: "chat-current", turn_id: "project-turn",
+      detail: "workspace_scope_rejected", reason: "invalid_project" });
+    await expect(delivery).rejects.toThrow("invalid_project");
+    expect(onError.mock.calls).toEqual([[{
+      kind: "workspace_scope_rejected", chatId: "chat-current", turnId: "project-turn", reason: "invalid_project",
+    }]]);
+    client.close();
+  });
+
+  it("does not resend written text after its acceptance becomes uncertain", async () => {
+    const client = new NanobotClient({ url: "ws://test", reconnect: true, maxBackoffMs: 10,
+      socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket });
+    client.connect();
+    const socket = lastSocket(); socket.fakeOpen();
+    const delivery = expect(client.sendTurn("chat-current", "already written", undefined, { turnId: "uncertain-turn" }))
+      .rejects.toThrow("acceptance not confirmed");
+    await vi.advanceTimersByTimeAsync(30_001);
+    await delivery;
+    expect(socket.sent.filter((frame) => JSON.parse(frame).type === "message")).toHaveLength(1);
+    socket.fakeCloseWithCode(1006);
+    await vi.advanceTimersByTimeAsync(20);
+    const reconnected = lastSocket(); reconnected.fakeOpen();
+    expect(reconnected.sent.filter((frame) => JSON.parse(frame).type === "message")).toEqual([]);
+    client.close();
   });
 
   it("re-attaches known chats after a reconnect", async () => {
@@ -2564,7 +2622,7 @@ describe("binary attachment transport", () => {
       const socket = lastSocket(); socket.fakeOpen();
       socket.fakeMessage({ event: "ready", chat_id: "chat", client_id: "test",
         upload: { path: "/api/attachments", token: "cap" } });
-      const delivery = client.sendAttachments("chat", "look", [
+      const delivery = client.sendTurn("chat", "look", [
         { data_url: "data:text/plain;base64,eA==", name: "note.txt" },
       ], { turnId: "slow-upload" });
       await vi.advanceTimersByTimeAsync(80_000);
@@ -2586,7 +2644,7 @@ describe("binary attachment transport", () => {
       socket.fakeMessage({ event: "ready", chat_id: "chat", client_id: "test",
         upload: { path: "/api/attachments", token: "cap" } });
       const draft = [{ data_url: "data:text/plain;base64,eA==", name: "note.txt" }];
-      await expect(client.sendAttachments("chat", "x".repeat(400), draft)).rejects.toThrow("frame limit");
+      await expect(client.sendTurn("chat", "x".repeat(400), draft)).rejects.toThrow("frame limit");
       expect(socket.sent.filter((value) => JSON.parse(value).type === "message")).toHaveLength(0);
       expect(draft[0].data_url).toBe("data:text/plain;base64,eA==");
     } finally { client.close(); vi.unstubAllGlobals(); }
@@ -2605,7 +2663,7 @@ describe("binary attachment transport", () => {
         upload: { path: "/api/attachments", token: "upload-capability" } });
       const raw = "x".repeat(1_089_490);
       let accepted = false;
-      const delivery = client.sendAttachments("chat", "look", [
+      const delivery = client.sendTurn("chat", "look", [
         { data_url: `data:image/png;base64,${btoa(raw)}`, name: "paste.png" },
       ], { turnId: "large-image" }).then(() => { accepted = true; });
       await vi.waitFor(() => expect(socket.sent.some((frame) => frame.includes("opaque-ref"))).toBe(true));
@@ -2636,14 +2694,14 @@ describe("binary attachment transport", () => {
       socket.fakeMessage({ event: "ready", chat_id: "chat", client_id: "test",
         upload: { path: "/api/attachments", token: "cap" } });
       const draft = [{ data_url: "data:text/plain;base64,eA==", name: "note.txt" }];
-      await expect(client.sendAttachments("chat", "look", draft)).rejects.toThrow("401");
+      await expect(client.sendTurn("chat", "look", draft)).rejects.toThrow("401");
       expect(socket.sent.filter((frame) => JSON.parse(frame).type === "message")).toHaveLength(0);
       expect(draft[0].data_url).toBe("data:text/plain;base64,eA==");
       fetchMock.mockImplementation(async () => {
         socket.fakeCloseWithCode(1009);
         return Response.json({ reference: "old-connection-ref" });
       });
-      await expect(client.sendAttachments("chat", "look", draft)).rejects.toThrow("Connection changed");
+      await expect(client.sendTurn("chat", "look", draft)).rejects.toThrow("Connection changed");
       expect(socket.sent.filter((frame) => JSON.parse(frame).type === "message")).toHaveLength(0);
     } finally { client.close(); vi.unstubAllGlobals(); }
   });

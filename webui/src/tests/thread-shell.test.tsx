@@ -228,6 +228,7 @@ function makeClient() {
       for (const h of sessionUpdateHandlers) h(chatId, scope);
     },
     sendMessage,
+    sendTurn: vi.fn(async (...args: Parameters<typeof sendMessage>) => { sendMessage(...args); }),
     sendSystemCommand: vi.fn().mockResolvedValue(undefined),
     newChat: vi.fn(),
     forkChat: vi.fn(),
@@ -570,7 +571,7 @@ describe("ThreadShell", () => {
     const client = makeClient();
     let draftStore = new ComposerDraftStore();
     draftStore.set("websocket:reload-draft", {
-      text: "original", files: [], sessionMentions: [], quotedContext: "quoted answer",
+      text: "original", files: [], quotedContext: "quoted answer",
     });
     const shell = () => wrap(client, (
       <ThreadShell session={session("reload-draft")} title="Reload test" temporary={temporary}
@@ -616,8 +617,8 @@ describe("ThreadShell", () => {
   it.each([false, true])("keeps text and quote drafts scoped to the session (temporary=%s)", async (temporary) => {
     const client = makeClient();
     const draftStore: ComposerDraftStore = new Map([
-      ["websocket:draft-a", { text: "draft A", files: [], sessionMentions: [], quotedContext: "quote A" }],
-      ["websocket:draft-b", { text: "draft B", files: [], sessionMentions: [], quotedContext: "quote B" }],
+      ["websocket:draft-a", { text: "draft A", files: [], quotedContext: "quote A" }],
+      ["websocket:draft-b", { text: "draft B", files: [], quotedContext: "quote B" }],
     ]);
     const shell = (chatId: string) => wrap(client, (
       <ThreadShell session={session(chatId)} title="Draft test" temporary={temporary}

@@ -79,6 +79,7 @@ function fakeClient() {
   const unsettledRunByChatId = new Map<string, boolean>();
   const goalStateByChatId = new Map<string, GoalStateWsPayload>();
   const requestMutation = vi.fn().mockResolvedValue({});
+  const sendMessage = vi.fn();
   let status: ConnectionStatus = "open";
 
   function recordGoalStatusForRunStrip(chatId: string, ev: InboundEvent) {
@@ -146,8 +147,8 @@ function fakeClient() {
         set.add(h);
         return () => set!.delete(h);
       },
-      sendMessage: vi.fn(),
-      sendAttachments: vi.fn().mockResolvedValue(undefined),
+      sendMessage,
+      sendTurn: vi.fn(async (...args: unknown[]) => { sendMessage(...args); }),
       requestMutation,
       finishRunLocally: vi.fn(),
       newChat: vi.fn(),
@@ -2388,6 +2389,34 @@ describe("useNanobotStream", () => {
     ]);
   });
 
+  it("decorates its optimistic row with authoritative references returned by the gateway", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useNanobotStream("chat-local", EMPTY_MESSAGES), {
+      wrapper: wrap(fake.client),
+    });
+    let submitted: ReturnType<typeof result.current.send> = null;
+    act(() => { submitted = result.current.send("Use @bime"); });
+    const references = [{ name: "bime", session_key: "websocket:pricing", title: "Pricing" }];
+    act(() => {
+      fake.emit("chat-local", { event: "user_message", chat_id: "chat-local", turn_id: submitted!.turnId,
+        text: "Use @bime", session_mentions: references });
+    });
+    expect(result.current.messages).toEqual([expect.objectContaining({
+      id: submitted!.userMessageId, content: "Use @bime", deliveryStatus: "accepted", sessionMentions: references,
+    })]);
+  });
+
+  it("returns a localized receipt rejection for retaining the draft", async () => {
+    const fake = fakeClient();
+    fake.client.sendTurn.mockRejectedValueOnce(new Error("too_many_session_mentions"));
+    const { result } = renderHook(() => useNanobotStream("chat-local", EMPTY_MESSAGES), {
+      wrapper: wrap(fake.client),
+    });
+    let submitted: ReturnType<typeof result.current.send> = null;
+    act(() => { submitted = result.current.send("Use @bime"); });
+    await expect(submitted!.delivery).rejects.toThrow("A message can mention up to 8 chats");
+  });
+
   it("projects a user turn submitted from another attached client exactly once", () => {
     const fake = fakeClient();
     const { result } = renderHook(
@@ -2748,7 +2777,7 @@ describe("useNanobotStream", () => {
 
     expect(result.current.messages[0].media).toEqual([attachment.preview]);
     expect(result.current.messages[0].images).toBeUndefined();
-    expect(fake.client.sendAttachments).toHaveBeenCalledWith(
+    expect(fake.client.sendTurn).toHaveBeenCalledWith(
       "chat-file-send",
       "summarize",
       [attachment.media],

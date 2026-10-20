@@ -27,7 +27,6 @@ import type {
   OutboundCliAppMention,
   OutboundMcpPresetMention,
   OutboundMedia,
-  SessionMention,
   GoalStateWsPayload,
   MessageDeliveryStatus,
   RecoveryState,
@@ -68,7 +67,6 @@ export interface SendOptions {
   intent?: "create_automation";
   cliApps?: OutboundCliAppMention[];
   mcpPresets?: OutboundMcpPresetMention[];
-  sessionMentions?: SessionMention[];
   quotedContext?: string;
   workspaceScope?: WorkspaceScopePayload | null;
   sideChannel?: boolean;
@@ -598,7 +596,11 @@ export function useNanobotStream(
         setMessages((prev) => {
           if (ev.turn_id && prev.some((message) => (
             message.role === "user" && message.turnId === ev.turn_id
-          ))) return prev;
+          ))) return prev.map((message) => (
+            message.role === "user" && message.turnId === ev.turn_id
+              ? { ...message, sessionMentions: ev.session_mentions }
+              : message
+          ));
           return [
             ...prev,
             {
@@ -957,9 +959,6 @@ export function useNanobotStream(
             ...(previews ? { media: previews } : {}),
             ...(options?.cliApps?.length ? { cliApps: options.cliApps } : {}),
             ...(options?.mcpPresets?.length ? { mcpPresets: options.mcpPresets } : {}),
-            ...(options?.sessionMentions?.length
-              ? { sessionMentions: options.sessionMentions }
-              : {}),
             },
         ];
         projectionRef.current = { ...projection, messages: next };
@@ -976,16 +975,18 @@ export function useNanobotStream(
       delete clientOptions.sideChannel;
       delete clientOptions.finalizeActiveTurn;
       delete clientOptions.continueActiveTurn;
-      const delivery = wireMedia?.length
-        ? client.sendAttachments(chatId, outboundContent, wireMedia, clientOptions)
-        : undefined;
-      if (!delivery) client.sendMessage(chatId, outboundContent, undefined, clientOptions);
-      // Every caller may keep this promise to retain its draft until accepted.
-      // Also observe it here for queued/landing sends without an active composer.
-      void delivery?.catch(() => {});
+      const delivery = client.sendTurn(chatId, outboundContent, wireMedia, clientOptions)
+        .catch((error: unknown) => {
+          if (error instanceof Error && error.message === "too_many_session_mentions") {
+            throw new Error(t("thread.composer.queued.tooManyMentions", { max: 8 }));
+          }
+          throw error;
+        });
+      // Callers retain drafts and queued messages until the gateway accepts the text.
+      void delivery.catch(() => {});
       return { turnId, userMessageId, sideChannel, delivery };
     },
-    [chatId, clearActivitySegment, client, flushPendingStreamEvents, setMessages],
+    [chatId, clearActivitySegment, client, flushPendingStreamEvents, setMessages, t],
   );
 
   const stop = useCallback(() => {

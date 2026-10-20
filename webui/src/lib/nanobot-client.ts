@@ -8,7 +8,6 @@ import type {
   OutboundCliAppMention,
   OutboundMcpPresetMention,
   OutboundMedia,
-  SessionMention,
   SidebarStatePayload,
   GoalStateWsPayload,
   WorkspaceScopePayload,
@@ -694,8 +693,8 @@ export class NanobotClient {
     }
   }
 
-  async sendAttachments(
-    chatId: string, content: string, media: OutboundMedia[],
+  async sendTurn(
+    chatId: string, content: string, media?: OutboundMedia[],
     options?: Parameters<NanobotClient["sendMessage"]>[3],
   ): Promise<void> {
     const socket = this.socket;
@@ -703,19 +702,28 @@ export class NanobotClient {
     const turnId = options?.turnId ?? crypto.randomUUID();
     const stillConnected = () => this.socket === socket
       && socket?.readyState === WS_OPEN && this.upload === capability;
+    let deliveryStarted = false;
     try {
-      const references = await uploadAttachments(media, capability,
-        typeof window !== "undefined" ? window.location.href : this.currentUrl,
-        stillConnected);
+      if (socket?.readyState !== WS_OPEN) throw new Error("WebUI connection is not open; draft retained");
+      const references = media?.length
+        ? await uploadAttachments(media, capability,
+          typeof window !== "undefined" ? window.location.href : this.currentUrl,
+          stillConnected)
+        : undefined;
       if (!stillConnected()) throw new Error("Connection changed during attachment send");
+      deliveryStarted = true;
       await this.receipts.wait(turnId, () => {
         if (!this.sendMessage(chatId, content, references, { ...options, turnId })) {
           throw new Error("Message exceeds the gateway's WebSocket frame limit; draft retained");
         }
       });
     } catch (error) {
-      this.emitError({ kind: "turn_rejected", chatId, turnId, detail: "attachment_rejected",
-        reason: error instanceof Error ? error.message : "Attachment send failed" });
+      // Gateway and frame-limit rejections already report after settling delivery.
+      if (!deliveryStarted || this.runs.hasPendingSend({ chatId, turnId })) {
+        this.emitError({ kind: "turn_rejected", chatId, turnId,
+          detail: media?.length ? "attachment_rejected" : "message_rejected",
+          reason: error instanceof Error ? error.message : "Message send failed" });
+      }
       throw error;
     }
   }
@@ -727,7 +735,6 @@ export class NanobotClient {
     options?: {
       cliApps?: OutboundCliAppMention[];
       mcpPresets?: OutboundMcpPresetMention[];
-      sessionMentions?: SessionMention[];
       quotedContext?: string;
       intent?: "create_automation";
       workspaceScope?: WorkspaceScopePayload | null;
@@ -745,9 +752,6 @@ export class NanobotClient {
       ...(media && media.length > 0 ? { media } : {}),
       ...(options?.cliApps?.length ? { cli_apps: options.cliApps } : {}),
       ...(options?.mcpPresets?.length ? { mcp_presets: options.mcpPresets } : {}),
-      ...(options?.sessionMentions?.length
-        ? { session_mentions: options.sessionMentions }
-        : {}),
       ...(options?.quotedContext?.trim() ? { quoted_context: options.quotedContext.trim() } : {}),
       ...(options?.intent === "create_automation" ? { intent: options.intent } : {}),
       ...(options?.workspaceScope ? { workspace_scope: options.workspaceScope } : {}),

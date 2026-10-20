@@ -226,6 +226,14 @@ Recognized fields: `content`, `text`, `message` (checked in that order). Invalid
 
 See [Multi-chat multiplexing](#multi-chat-multiplexing) for the full flow.
 
+### Saved-topic references (WebUI)
+
+For authenticated WebUI messages, the gateway resolves complete `@handle` tokens from `content` against its persisted session directory. The composer only decorates text and inserts handles; drafts and waiting messages do not bind hidden target identities. Resolution uses the directory at send time, excludes the current session, deduplicates by session key, and leaves unknown handles as ordinary text. Ordinary WebSocket clients and user-shell commands do not receive this enrichment.
+
+The gateway ignores the legacy outbound `session_mentions` field. Its canonical `user_message` event and persisted transcript still include authoritative `session_mentions` for rendering stable history links. More than eight distinct resolved targets produces `error` with `detail: "message_rejected"`, `reason: "too_many_session_mentions"`, and the submitted `chat_id`/`turn_id`, before dispatch or transcript admission. Clients retain text and waiting messages until `message_accepted` or the canonical `user_message` confirms delivery. A user submission without an open connection is rejected locally, not queued for reconnect; a written message with uncertain acceptance is not automatically replayed. Referencing a topic does not itself send a cross-session message.
+
+Text-only reference submission requires a host that resolves references from content. An older host still accepts the text but does not add session-reference context. Updating the local WebUI does not update remote hosts.
+
 ### Binary attachments (WebUI and TUI)
 
 The gateway advertises `webui.attachments.binary.v1`. WebUI protocol 1 and the terminal protocol are unchanged. Bundled clients and their gateway use HTTP on the same listener for attachment uploads. After an authorized handshake, `ready` includes an `upload` object with `path: "/api/attachments"` and an opaque `token`. This token is a short-lived capability tied to that live connection, not the one-time handshake token, API token, or client-selected `client_id`.

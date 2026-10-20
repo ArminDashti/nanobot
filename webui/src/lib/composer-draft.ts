@@ -1,10 +1,7 @@
-import type { SessionMention } from "./types";
-
 /** Files stay in memory, including unfinished attachments. */
 export interface ComposerDraft {
   text: string;
   files: File[];
-  sessionMentions: SessionMention[];
   quotedContext: string | null;
 }
 
@@ -19,22 +16,8 @@ function readDraft(raw: string): ComposerDraft | undefined {
   if (raw.length > MAX_STORED_CHARS) return undefined;
   const value: unknown = JSON.parse(raw);
   if (!isRecord(value) || typeof value.text !== "string"
-    || (value.quotedContext !== null && typeof value.quotedContext !== "string")
-    || !Array.isArray(value.sessionMentions)) return undefined;
-  const sessionMentions = value.sessionMentions.flatMap((item: unknown): SessionMention[] => {
-    if (!isRecord(item) || typeof item.name !== "string"
-      || !/^[\p{L}\p{N}_-]{1,80}$/u.test(item.name)
-      || typeof item.session_key !== "string" || !item.session_key.startsWith("websocket:")
-      || item.session_key.length > 512 || typeof item.title !== "string") return [];
-    return [{
-      name: item.name,
-      session_key: item.session_key,
-      title: item.title.slice(0, 160),
-      ...(typeof item.id === "string" && /^handle_[a-f0-9]{32}$/i.test(item.id)
-        ? { id: item.id } : {}),
-    }];
-  });
-  return { text: value.text, quotedContext: value.quotedContext, sessionMentions, files: [] };
+    || (value.quotedContext !== null && typeof value.quotedContext !== "string")) return undefined;
+  return { text: value.text, quotedContext: value.quotedContext, files: [] };
 }
 
 function removeStoredDraft(key: string): void {
@@ -70,9 +53,7 @@ export class ComposerDraftStore extends Map<string, ComposerDraft> {
       && previous.text === draft.text
       && previous.quotedContext === draft.quotedContext
       && previous.files.length === draft.files.length
-      && previous.files.every((file, index) => file === draft.files[index])
-      && previous.sessionMentions.length === draft.sessionMentions.length
-      && previous.sessionMentions.every((mention, index) => mention === draft.sessionMentions[index]);
+      && previous.files.every((file, index) => file === draft.files[index]);
     // Restoring a composer is not an edit. Pending sends retain this identity across mounts.
     super.set(key, unchanged ? previous : draft);
     if (!persist) return this;
@@ -84,7 +65,6 @@ export class ComposerDraftStore extends Map<string, ComposerDraft> {
       const raw = JSON.stringify({
         text: draft.text,
         quotedContext: draft.quotedContext,
-        sessionMentions: draft.sessionMentions,
       });
       if (raw.length <= MAX_STORED_CHARS) localStorage.setItem(STORAGE_PREFIX + key, raw);
       else removeStoredDraft(key);

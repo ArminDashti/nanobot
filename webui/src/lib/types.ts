@@ -1777,7 +1777,6 @@ export type Outbound =
       media?: import("../../../packages/client-events/attachments").AttachmentReference[];
       cli_apps?: OutboundCliAppMention[];
       mcp_presets?: OutboundMcpPresetMention[];
-      session_mentions?: SessionMention[];
       quoted_context?: string;
       intent?: "create_automation";
       workspace_scope?: WorkspaceScopePayload;

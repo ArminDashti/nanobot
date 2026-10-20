@@ -286,6 +286,7 @@ vi.mock("@/lib/nanobot-client", async (importOriginal) => {
     fenceCanonicalCompletedTurns = vi.fn();
     getGoalState = () => undefined;
     sendMessage = sendMessageSpy;
+    sendTurn = async (...args: unknown[]) => { sendMessageSpy(...args); };
     newChat = vi.fn();
     newTemporaryChat = newTemporaryChatSpy;
     attach = attachSpy;

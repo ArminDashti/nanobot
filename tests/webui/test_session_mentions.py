@@ -8,20 +8,26 @@ import pytest
 
 from nanobot.session.manager import SessionManager
 from nanobot.session.session_handles import (
+    SESSION_HANDLE_METADATA_KEY,
     SessionHandle,
     SessionHandleResolver,
     session_handle_for_name,
 )
 from nanobot.webui.session_access import (
+    TooManySessionMentionsError,
     WebuiSessionAccess,
     session_mentions_runtime_context,
 )
 from nanobot.webui.transcript import normalize_session_mentions_metadata
 
 
-def _save_session(manager: SessionManager, key: str, title: str) -> None:
+def _save_session(
+    manager: SessionManager, key: str, title: str, *, name: str | None = None,
+) -> None:
     session = manager.get_or_create(key)
     session.metadata.update({"title": title, "title_user_edited": True})
+    if name is not None:
+        session.metadata[SESSION_HANDLE_METADATA_KEY] = name
     session.add_message("user", "hello")
     manager.save(session)
 
@@ -32,8 +38,14 @@ def _handle(manager: SessionManager, key: str) -> SessionHandle:
     return handle
 
 
-@pytest.mark.parametrize("raw", [None, []], ids=["missing", "empty"])
-async def test_empty_mentions_do_not_wait_for_unrelated_storage(tmp_path, monkeypatch, raw):
+@pytest.mark.parametrize("content", [
+    "",
+    "Ordinary text without any mention",
+    "mail@bime /tmp/@bime @bi @bime2 @bime_foo @bime中文 @bime-foo @abcdefghijklmnopq",
+], ids=["empty", "no-at-sign", "no-possible-handle"])
+async def test_text_without_handle_candidates_does_not_wait_for_unrelated_storage(
+    tmp_path, monkeypatch, content,
+):
     manager = SessionManager(tmp_path)
     state = manager.state
     await state.get("websocket:busy")
@@ -49,7 +61,7 @@ async def test_empty_mentions_do_not_wait_for_unrelated_storage(tmp_path, monkey
     busy = asyncio.create_task(state.update_metadata("websocket:busy", {"title": "busy"}))
     try:
         assert await asyncio.to_thread(started.wait, 2)
-        assert await asyncio.wait_for(WebuiSessionAccess(manager).normalize_mentions(raw), 1) == []
+        assert await asyncio.wait_for(WebuiSessionAccess(manager).resolve_mentions(content), 1) == []
         assert not busy.done()
     finally:
         release.set()
@@ -58,32 +70,14 @@ async def test_empty_mentions_do_not_wait_for_unrelated_storage(tmp_path, monkey
 
 
 @pytest.mark.asyncio
-async def test_normalize_session_mentions_keeps_only_existing_distinct_other_targets(
-    tmp_path,
-    monkeypatch,
-) -> None:
+async def test_text_mentions_resolve_authoritative_targets_in_first_occurrence_order(tmp_path) -> None:
     manager = SessionManager(tmp_path)
-    _save_session(manager, "websocket:current", "Current")
-    _save_session(manager, "websocket:pricing", "Authoritative title")
-    _save_session(manager, "websocket:other", "Other")
-    _save_session(manager, "websocket:street", "Straße")
-    _save_session(manager, "websocket:upper", "STRASSE")
-    _save_session(manager, "telegram:history", "Telegram history")
-    mentions = await WebuiSessionAccess(manager).normalize_mentions(
-        [
-            {
-                "name": "pricing",
-                "session_key": "websocket:pricing",
-                "title": "Client title",
-            },
-            {"name": "duplicate", "session_key": "websocket:pricing"},
-            {"name": "PRICING", "session_key": "websocket:other"},
-            {"name": "current", "session_key": "websocket:current"},
-            {"name": "missing", "session_key": "websocket:missing"},
-            {"name": "Straße", "session_key": "websocket:street"},
-            {"name": "STRASSE", "session_key": "websocket:upper"},
-            {"name": "telegram", "session_key": "telegram:history"},
-        ],
+    _save_session(manager, "websocket:current", "Current", name="tora")
+    _save_session(manager, "websocket:pricing", "Authoritative title", name="bime")
+    _save_session(manager, "websocket:other", "Other", name="luma")
+    _save_session(manager, "telegram:history", "Telegram history", name="nora")
+    mentions = await WebuiSessionAccess(manager).resolve_mentions(
+        "Use @NORA, then @BIME. @bime @tora @missing @pricing @LUMA @nora",
         exclude_session_key="websocket:current",
     )
 
@@ -96,14 +90,65 @@ async def test_normalize_session_mentions_keeps_only_existing_distinct_other_tar
             "title": title,
         }
         for key, title in (
+            ("telegram:history", "Telegram history"),
             ("websocket:pricing", "Authoritative title"),
             ("websocket:other", "Other"),
-            ("websocket:street", "Straße"),
-            ("websocket:upper", "STRASSE"),
-            ("telegram:history", "Telegram history"),
         )
         for handle in (handles[key],)
     ]
+    await manager.state.aclose()
+
+
+@pytest.mark.asyncio
+async def test_text_mention_start_boundaries_match_composer_syntax(tmp_path) -> None:
+    manager = SessionManager(tmp_path)
+    _save_session(manager, "websocket:history", "History", name="bime")
+    handle = _handle(manager, "websocket:history")
+    access = WebuiSessionAccess(manager)
+    expected = [{
+        **handle.public_payload(), "session_key": "websocket:history", "title": "History",
+    }]
+
+    for prefix in ("", " ", "\t", "\n", "\u00a0", "\ufeff", "\u2028", *"([{,，、;；:：!?！？。"):
+        assert await access.resolve_mentions(f"{prefix}@BiMe.") == expected, repr(prefix)
+    for suffix in ("", " ", ")", "]", "}", ",", "，", "。", ".", "'s"):
+        assert await access.resolve_mentions(f"@bime{suffix}") == expected, repr(suffix)
+    await manager.state.aclose()
+
+
+@pytest.mark.asyncio
+async def test_embedded_and_longer_unicode_tokens_are_not_session_mentions(tmp_path) -> None:
+    manager = SessionManager(tmp_path)
+    _save_session(manager, "websocket:history", "History", name="bime")
+    access = WebuiSessionAccess(manager)
+
+    for content in (
+        "person@bime", "前@bime", "/tmp/@bime", "./@bime", r"C:\tmp\@bime",
+        "https://example.test/@bime", "'@bime'", ".@bime", "#@bime",
+        "@bime2", "@bime_foo", "@bime-foo", "@bime中文", "@bimeé", "@bime²", "@bimeⅧ",
+        "@bimex", "@bimeabcdefghijklmnop", "@bİme", "\u0085@bime", "\x1c@bime",
+    ):
+        assert await access.resolve_mentions(content) == [], content
+    await manager.state.aclose()
+
+
+@pytest.mark.asyncio
+async def test_text_mentions_accept_eight_targets_but_reject_nine(tmp_path) -> None:
+    manager = SessionManager(tmp_path)
+    names = ["bime", "luma", "nora", "tora", "riva", "sela", "vira", "zora", "pola"]
+    _save_session(manager, "websocket:current", "Current", name="mino")
+    for name in names:
+        _save_session(manager, f"websocket:{name}", name, name=name)
+    access = WebuiSessionAccess(manager)
+    content = "@mino @missing @BIME " + " ".join(f"@{name}" for name in names[:8])
+
+    mentions = await access.resolve_mentions(content, exclude_session_key="websocket:current")
+    assert [mention["session_key"] for mention in mentions] == [
+        f"websocket:{name}" for name in names[:8]
+    ]
+    with pytest.raises(TooManySessionMentionsError):
+        await access.resolve_mentions(content + " @pola", exclude_session_key="websocket:current")
+    await manager.state.aclose()
 
 
 def test_session_mention_context_treats_titles_as_data() -> None:
@@ -140,20 +185,18 @@ async def test_session_mentions_do_not_isolate_workspaces(tmp_path, monkeypatch)
     })
     manager.save(session)
 
-    access = WebuiSessionAccess(manager)
-    mentions = await access.normalize_mentions(
-        [{"name": "other", "session_key": "websocket:other"}],
+    handle = _handle(manager, "websocket:other")
+    mentions = await WebuiSessionAccess(manager).resolve_mentions(
+        f"Use @{handle.name}",
         exclude_session_key="websocket:current",
     )
-
-    handle = await SessionHandleResolver(manager).ahandle_for_session("websocket:other")
-    assert handle is not None
     assert mentions == [{
         "id": handle.id,
         "name": handle.name,
         "session_key": "websocket:other",
         "title": "Other",
     }]
+    await manager.state.aclose()
 
 
 def test_persisted_session_mentions_validate_fields() -> None:

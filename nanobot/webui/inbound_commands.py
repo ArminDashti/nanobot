@@ -55,6 +55,7 @@ from nanobot.webui.metadata import (
 )
 from nanobot.webui.session_access import (
     SessionMention,
+    TooManySessionMentionsError,
     WebuiSessionAccess,
     session_mentions_runtime_context,
 )
@@ -271,7 +272,8 @@ class WebUICommandRouter:
             body["started_at"] = started_at
         raw = json.dumps(body, ensure_ascii=False)
         for connection in self._transport.webui_subscribers(chat_id):
-            if connection is not origin:
+            # The origin needs server-resolved references for its optimistic row too.
+            if connection is not origin or session_mentions:
                 await self._transport.webui_send_raw(connection, raw, label=" user_message ")
 
     async def workspace_scope_or_error(
@@ -684,11 +686,21 @@ class WebUICommandRouter:
         if mcp_presets:
             metadata["mcp_presets"] = mcp_presets
         session_mentions: list[SessionMention] = []
-        if trusted_webui and self._session_access is not None:
-            session_mentions = await self._session_access.normalize_mentions(
-                envelope.get("session_mentions"),
-                exclude_session_key=webui_session_key(chat_id),
-            )
+        if trusted_webui and not is_user_shell and self._session_access is not None:
+            try:
+                session_mentions = await self._session_access.resolve_mentions(
+                    content,
+                    exclude_session_key=webui_session_key(chat_id),
+                )
+            except TooManySessionMentionsError:
+                await self._transport.webui_send_event(
+                    connection,
+                    "error",
+                    detail="message_rejected",
+                    reason="too_many_session_mentions",
+                    **rejection_fields,
+                )
+                return
             if session_mentions:
                 metadata["session_mentions"] = session_mentions
         metadata[WORKSPACE_SCOPE_METADATA_KEY] = scope.metadata()

@@ -5,9 +5,8 @@ import { ComposerDraftStore, clearStoredComposerDrafts, type ComposerDraft } fro
 const key = "websocket:draft-storage-test";
 const storageKey = `nanobot.composer-draft.v1.${key}`;
 const draft: ComposerDraft = {
-  text: "  Keep this draft\n继续编辑",
+  text: "  Keep this draft @bime\n继续编辑",
   quotedContext: "Quoted answer",
-  sessionMentions: [{ name: "other", title: "Other topic", session_key: "websocket:other" }],
   files: [new File(["attachment"], "draft.txt", { type: "text/plain" })],
 };
 
@@ -17,7 +16,7 @@ afterEach(() => {
 });
 
 describe("composer draft storage", () => {
-  it("restores text, mentions and quotes in a fresh store while keeping files in memory", () => {
+  it("restores text and quotes in a fresh store while keeping files in memory", () => {
     const store = new ComposerDraftStore();
     store.set(key, draft, true);
     expect(store.get(key)).toBe(draft);
@@ -29,7 +28,7 @@ describe("composer draft storage", () => {
   it("keeps the identity of an unchanged restored draft but advances it for edits", () => {
     const store = new ComposerDraftStore();
     store.set(key, draft, true);
-    store.set(key, { ...draft, files: [...draft.files], sessionMentions: [...draft.sessionMentions] }, true);
+    store.set(key, { ...draft, files: [...draft.files] }, true);
     expect(store.get(key)).toBe(draft);
     const edited = { ...draft, text: "edited draft" };
     store.set(key, edited, true);
@@ -51,7 +50,7 @@ describe("composer draft storage", () => {
   it("removes saved text when discarded, even if attachments remain", () => {
     const store = new ComposerDraftStore();
     store.set(key, draft, true);
-    store.set(key, { ...draft, text: "", quotedContext: null, sessionMentions: [] }, true);
+    store.set(key, { ...draft, text: "", quotedContext: null }, true);
     expect(store.get(key)?.files).toEqual(draft.files);
     expect(new ComposerDraftStore().get(key, true)).toBeUndefined();
   });
@@ -78,9 +77,9 @@ describe("composer draft storage", () => {
     },
   );
 
-  it("drops malformed mention records without losing the draft text", () => {
+  it("restores text and quotes from drafts saved by an older client", () => {
     localStorage.setItem(storageKey, JSON.stringify({
-      ...draft, sessionMentions: [null, { name: 42 }, ...draft.sessionMentions],
+      ...draft, sessionMentions: [{ name: "bime", session_key: "websocket:other", title: "Other" }],
     }));
     expect(new ComposerDraftStore().get(key, true)).toEqual({ ...draft, files: [] });
   });

@@ -207,7 +207,7 @@ With voice transcription configured, the idle composer uses one button for voice
 
 The composer supports plain messages, image attachments, voice input when transcription is configured, slash commands, and `@` mentions for installed Apps, MCP presets, or saved topics.
 
-To reference another topic, type or paste its complete handle (such as `@luma`), choose it from the `@` menu, or drag it from the sidebar into the composer. Recognized handles are highlighted; unknown handles remain plain text. You can reference up to eight different topics in one message.
+To reference another topic, type or paste its complete handle (such as `@luma`), choose it from the `@` menu, or drag it from the sidebar into the composer. Recognized handles are highlighted; topics are resolved when you send the message. Unknown handles remain plain text. You can reference up to eight different topics in one message; if a send is rejected, your text stays available to edit and resend.
 
 Ask nanobot to find, read, or send messages to other saved topics, including those in other projects. For example, “Summarize @luma” or “Send this update to @luma.” Mentioning a topic alone does not send a message to it.
 

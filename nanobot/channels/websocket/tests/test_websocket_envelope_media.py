@@ -8,15 +8,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from nanobot.bus.events import INBOUND_META_USER_SHELL
 from nanobot.channels.websocket.runtime import (
     WebSocketChannel,
     WebSocketConfig,
 )
+from nanobot.command.builtin import USER_SHELL_COMMAND
 from nanobot.runtime_context import RUNTIME_CONTEXT_INPUT_META
 from nanobot.session import webui_turns as wth
 from nanobot.session.manager import SessionManager
-from nanobot.session.session_handles import SessionHandleResolver
+from nanobot.session.session_handles import SESSION_HANDLE_METADATA_KEY, SessionHandleResolver
 from nanobot.webui.gateway_services import build_gateway_services
+from nanobot.webui.session_access import WebuiSessionAccess
+from nanobot.webui.transcript import read_transcript_lines
 
 
 def _make_channel(session_manager: SessionManager | None = None) -> WebSocketChannel:
@@ -169,41 +173,195 @@ async def test_message_forwards_normalized_cli_app_attachments() -> None:
 
 
 @pytest.mark.asyncio
-async def test_webui_message_forwards_verified_session_mentions(tmp_path) -> None:
+@pytest.mark.parametrize(("content", "send_legacy", "references_target"), [
+    ("Use @bime", False, True),
+    ("Use @BIME", True, True),
+    ("Pasted text:\n(@bime), @bime", False, True),
+    ("No reference remains in this text", True, False),
+    ("Use @unknown", True, False),
+], ids=["plain-text", "forged-metadata", "pasted-text", "removed-mention", "unknown-handle"])
+async def test_webui_message_resolves_text_for_dispatch_echo_and_transcript(
+    tmp_path, content, send_legacy, references_target,
+) -> None:
     manager = SessionManager(tmp_path)
-    target = manager.get_or_create("websocket:pricing")
-    target.metadata.update({"title": "Pricing", "title_user_edited": True})
-    target.add_message("user", "Discuss cloud storage")
-    manager.save(target)
+    for key, name, title in (
+        ("websocket:pricing", "bime", "Pricing"),
+        ("websocket:forged", "luma", "Not referenced in the text"),
+    ):
+        target = manager.get_or_create(key)
+        target.metadata.update({"title": title, SESSION_HANDLE_METADATA_KEY: name})
+        target.add_message("user", "Discuss cloud storage")
+        manager.save(target)
     channel = _make_channel(manager)
-    mock_conn = AsyncMock()
-    channel._webui_connections.add(mock_conn)
+    origin, peer = AsyncMock(), AsyncMock()
+    channel._webui_connections.add(origin)
+    channel._attach(peer, "current")
     envelope = {
         "type": "message",
         "chat_id": "current",
-        "content": "Use @pricing",
+        "turn_id": "session-mention-turn",
+        "content": content,
         "webui": True,
-        "session_mentions": [{
-            "name": "pricing",
-            "session_key": "websocket:pricing",
-            "title": "Untrusted title",
-        }],
     }
+    if send_legacy:
+        envelope["session_mentions"] = [{
+            "name": "bime",
+            "session_key": "websocket:forged",
+            "title": "Untrusted title",
+        }]
 
-    await channel._dispatch_envelope(mock_conn, "client-1", envelope)
+    await channel._dispatch_envelope(origin, "client-1", envelope)
 
     channel._handle_message.assert_awaited_once()
-    metadata = channel._handle_message.call_args.kwargs["metadata"]
+    call = channel._handle_message.call_args
+    assert call.kwargs["chat_id"] == "current"
+    assert call.kwargs["content"] == content
+    metadata = call.kwargs["metadata"]
     handle = await SessionHandleResolver(manager).ahandle_for_session("websocket:pricing")
     assert handle is not None
-    assert metadata["session_mentions"] == [{
-        **handle.public_payload(),
-        "session_key": "websocket:pricing",
-        "title": "Pricing",
-    }]
-    [block] = metadata[RUNTIME_CONTEXT_INPUT_META]
-    assert block.source == "session_mentions"
-    assert "websocket:pricing" in block.content
+    expected = [{
+        **handle.public_payload(), "session_key": "websocket:pricing", "title": "Pricing",
+    }] if references_target else []
+    assert metadata.get("session_mentions", []) == expected
+    if references_target:
+        [block] = metadata[RUNTIME_CONTEXT_INPUT_META]
+        assert block.source == "session_mentions"
+        assert "websocket:pricing" in block.content
+        assert "websocket:forged" not in block.content
+    else:
+        assert RUNTIME_CONTEXT_INPUT_META not in metadata
+    events = [json.loads(call.args[0]) for call in peer.send.await_args_list]
+    [echo] = [event for event in events if event.get("event") == "user_message"]
+    assert echo["text"] == content
+    assert echo.get("session_mentions", []) == expected
+    origin_events = [json.loads(call.args[0]) for call in origin.send.await_args_list]
+    assert [event for event in origin_events if event.get("event") == "user_message"] == (
+        [echo] if references_target else []
+    )
+    [persisted] = read_transcript_lines("websocket:current")
+    assert persisted["text"] == content
+    assert persisted.get("session_mentions", []) == expected
+    await channel._cleanup_connection(origin)
+    await channel._cleanup_connection(peer)
+    await manager.state.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("webui", "registered"), [(False, False), (False, True), (True, False)])
+async def test_only_trusted_webui_messages_resolve_session_mentions(
+    tmp_path, monkeypatch, webui, registered,
+) -> None:
+    manager = SessionManager(tmp_path)
+    target = manager.get_or_create("websocket:pricing")
+    target.metadata.update({"title": "Pricing", SESSION_HANDLE_METADATA_KEY: "bime"})
+    manager.save(target)
+    resolve = AsyncMock(side_effect=AssertionError("Untrusted clients must not resolve handles"))
+    monkeypatch.setattr(WebuiSessionAccess, "resolve_mentions", resolve)
+    channel = _make_channel(manager)
+    connection = AsyncMock()
+    if registered:
+        channel._webui_connections.add(connection)
+
+    await channel._dispatch_envelope(connection, "client-1", {
+        "type": "message", "chat_id": "current", "content": "Use @bime", "webui": webui,
+        "session_mentions": [{"name": "bime", "session_key": "websocket:pricing"}],
+    })
+
+    resolve.assert_not_awaited()
+    channel._handle_message.assert_awaited_once()
+    metadata = channel._handle_message.call_args.kwargs["metadata"]
+    assert "session_mentions" not in metadata
+    assert RUNTIME_CONTEXT_INPUT_META not in metadata
+    await channel._cleanup_connection(connection)
+    await manager.state.aclose()
+
+
+@pytest.mark.asyncio
+async def test_user_shell_handle_arguments_do_not_become_session_mentions(tmp_path) -> None:
+    manager = SessionManager(tmp_path)
+    names = ["bime", "luma", "nora", "tora", "riva", "sela", "vira", "zora", "pola"]
+    for name in names:
+        target = manager.get_or_create(f"websocket:{name}")
+        target.metadata.update({"title": name, SESSION_HANDLE_METADATA_KEY: name})
+        manager.save(target)
+    channel = _make_channel(manager)
+    connection = AsyncMock()
+    channel._webui_connections.add(connection)
+    content = "!echo " + " ".join(f"@{name}" for name in names)
+
+    await channel._dispatch_envelope(connection, "client-1", {
+        "type": "message", "chat_id": "current", "turn_id": "shell-mention-turn",
+        "content": content, "webui": True, "user_shell": True,
+    })
+
+    channel._handle_message.assert_awaited_once()
+    call = channel._handle_message.call_args
+    assert call.kwargs["content"] == f"{USER_SHELL_COMMAND} {content[1:]}"
+    metadata = call.kwargs["metadata"]
+    assert metadata[INBOUND_META_USER_SHELL] is True
+    assert "session_mentions" not in metadata
+    assert RUNTIME_CONTEXT_INPUT_META not in metadata
+    [persisted] = read_transcript_lines("websocket:current")
+    assert persisted["text"] == content
+    assert "session_mentions" not in persisted
+    assert json.loads(connection.send.await_args.args[0])["event"] == "message_accepted"
+    await channel._cleanup_connection(connection)
+    await manager.state.aclose()
+
+
+@pytest.mark.asyncio
+async def test_ninth_session_mention_rejects_before_upload_commit_dispatch_or_transcript(
+    tmp_path, monkeypatch,
+) -> None:
+    manager = SessionManager(tmp_path)
+    names = ["bime", "luma", "nora", "tora", "riva", "sela", "vira", "zora", "pola"]
+    for name in names:
+        target = manager.get_or_create(f"websocket:{name}")
+        target.metadata.update({"title": name, SESSION_HANDLE_METADATA_KEY: name})
+        manager.save(target)
+    channel = _make_channel(manager)
+    connection = AsyncMock()
+    channel._webui_connections.add(connection)
+    owner = channel.gateway.uploads.issue(connection)["token"]
+    store = channel.gateway.uploads.store
+
+    async def body():
+        yield b"file"
+
+    reference = await store.upload(body(), owner=owner, mime="text/plain", size=4)
+    commit = MagicMock(wraps=store.commit)
+    monkeypatch.setattr(store, "commit", commit)
+    envelope = {
+        "type": "message", "chat_id": "current", "turn_id": "many-mentions-turn",
+        "content": "@missing @BIME " + " ".join(f"@{name}" for name in names),
+        "webui": True, "media": [{"reference": reference}],
+    }
+
+    await channel._dispatch_envelope(connection, "client-1", envelope)
+
+    channel._handle_message.assert_not_awaited()
+    commit.assert_not_called()
+    assert read_transcript_lines("websocket:current") == []
+    assert await manager.state.read_metadata("websocket:current") is None
+    assert json.loads(connection.send.await_args.args[0]) == {
+        "event": "error", "detail": "message_rejected", "reason": "too_many_session_mentions",
+        "chat_id": "current", "turn_id": "many-mentions-turn",
+    }
+    assert Path(store.resolve([reference], owner=owner)[0]).read_bytes() == b"file"
+
+    # Correcting the text can retry the same turn and still use the uncommitted upload.
+    envelope["content"] = "@missing @BIME " + " ".join(f"@{name}" for name in names[:8])
+    await channel._dispatch_envelope(connection, "client-1", envelope)
+
+    channel._handle_message.assert_awaited_once()
+    commit.assert_called_once_with([reference], owner=owner)
+    mentions = channel._handle_message.call_args.kwargs["metadata"]["session_mentions"]
+    assert [mention["name"] for mention in mentions] == names[:8]
+    [persisted] = read_transcript_lines("websocket:current")
+    assert persisted["session_mentions"] == mentions
+    assert json.loads(connection.send.await_args.args[0])["event"] == "message_accepted"
+    await channel._cleanup_connection(connection)
+    await manager.state.aclose()
 
 
 @pytest.mark.asyncio

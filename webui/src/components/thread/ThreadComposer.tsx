@@ -305,7 +305,6 @@ const SLASH_RECENTS_LIMIT = 5;
 const QUEUED_PROMPTS_STORAGE_PREFIX = "nanobot.webui.composerQueuedGuidance.v1:";
 const EMPTY_COMPLETED_TURN_IDS: readonly string[] = [];
 const QUEUED_PROMPTS_LIMIT = 20;
-const SESSION_MENTIONS_LIMIT = 8;
 
 function VoiceRecordingMeter({
   ariaLabel,
@@ -358,7 +357,6 @@ interface QueuedPrompt {
   text: string;
   images?: QueuedPromptImage[];
   quotedContext?: string;
-  sessionMentions?: SessionMention[];
   autoAfterTurnId?: string;
   autoPaused?: boolean;
 }
@@ -369,18 +367,11 @@ function pauseQueuedPrompt(prompt: QueuedPrompt): QueuedPrompt {
 
 function mergeQueuedPrompt(first: QueuedPrompt, next: QueuedPrompt): QueuedPrompt {
   const prompts = [first, next];
-  const mentions = new Map<string, SessionMention>();
-  for (const prompt of prompts) {
-    for (const mention of prompt.sessionMentions ?? []) {
-      if (!mentions.has(mention.session_key)) mentions.set(mention.session_key, mention);
-    }
-  }
   return {
     id: first.id,
     text: prompts.map((prompt) => prompt.text).filter(Boolean).join("\n"),
     images: prompts.flatMap((prompt) => prompt.images ?? []),
     quotedContext: [...new Set(prompts.map((prompt) => prompt.quotedContext).filter(Boolean))].join("\n\n"),
-    sessionMentions: [...mentions.values()],
     autoAfterTurnId: first.autoAfterTurnId,
     autoPaused: prompts.some((prompt) => prompt.autoPaused),
   };
@@ -514,29 +505,6 @@ function queuedPromptsStorageKey(key?: string | null): string | null {
   return clean ? `${QUEUED_PROMPTS_STORAGE_PREFIX}${clean}` : null;
 }
 
-function normalizeQueuedSessionMentions(value: unknown): SessionMention[] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((item) => {
-    if (!item || typeof item !== "object") return [];
-    const candidate = item as Partial<SessionMention>;
-    const name = candidate.name?.trim().slice(0, 80);
-    const sessionKey = candidate.session_key?.trim().slice(0, 512);
-    if (
-      !name
-      || !sessionKey?.startsWith("websocket:")
-      || !/^[\p{L}\p{N}_-]+$/u.test(name)
-    ) return [];
-    return [{
-      ...(typeof candidate.id === "string" && /^handle_[a-f0-9]{32}$/i.test(candidate.id)
-        ? { id: candidate.id }
-        : {}),
-      name,
-      session_key: sessionKey,
-      title: candidate.title?.trim().slice(0, 160) ?? "",
-    }];
-  });
-}
-
 function normalizeQueuedPrompt(item: unknown, index: number): QueuedPrompt | null {
   if (!item || typeof item !== "object") return null;
   const record = item as Partial<QueuedPrompt>;
@@ -566,7 +534,6 @@ function normalizeQueuedPrompt(item: unknown, index: number): QueuedPrompt | nul
   const quotedContext = typeof record.quotedContext === "string"
     ? record.quotedContext.trim()
     : "";
-  const sessionMentions = normalizeQueuedSessionMentions(record.sessionMentions);
   if (!text && images.length === 0) return null;
   const id = typeof record.id === "string" && record.id.trim()
     ? record.id
@@ -576,7 +543,6 @@ function normalizeQueuedPrompt(item: unknown, index: number): QueuedPrompt | nul
     text,
     ...(images.length > 0 ? { images } : {}),
     ...(quotedContext ? { quotedContext } : {}),
-    ...(sessionMentions.length > 0 ? { sessionMentions } : {}),
     ...(typeof record.autoAfterTurnId === "string" && record.autoAfterTurnId.trim()
       ? { autoAfterTurnId: record.autoAfterTurnId.trim() }
       : {}),
@@ -1083,9 +1049,6 @@ export function ThreadComposer({
   const [value, setValue] = useState(initialDraft?.text ?? "");
   const [composerFocused, setComposerFocused] = useState(false);
   const blurFrame = useRef<number | null>(null);
-  const [boundSessionMentions, setBoundSessionMentions] = useState<SessionMention[]>(
-    initialDraft?.sessionMentions ?? [],
-  );
   const [sessionDragPreview, setSessionDragPreview] = useState<{
     mention: SessionMention;
     start: number;
@@ -1467,14 +1430,7 @@ export function ThreadComposer({
     if (mentionSearchActive) onMentionSearch?.();
   }, [mentionSearchActive, onMentionSearch]);
 
-  const availableSessionMentions = useMemo(
-    () => sessionMentionOptions(sessions),
-    [sessions],
-  );
-  const sessionMentionCatalog = useMemo(
-    () => [...availableSessionMentions, ...boundSessionMentions],
-    [availableSessionMentions, boundSessionMentions],
-  );
+  const sessionMentionCatalog = useMemo(() => sessionMentionOptions(sessions), [sessions]);
   const mentionSegments = useMemo(
     () => splitCapabilityMentionSegments(value, cliApps, mcpPresets, sessionMentionCatalog),
     [cliApps, mcpPresets, sessionMentionCatalog, value],
@@ -1510,21 +1466,6 @@ export function ThreadComposer({
         sessionMentionCatalog,
       )
     : mentionInput.segments;
-  const activeSessionMentions = useMemo(() => {
-    const seen = new Set<string>();
-    return mentionSegments.flatMap((segment) => {
-      if (segment.kind !== "session" || seen.has(segment.mention.session_key)) return [];
-      seen.add(segment.mention.session_key);
-      return [segment.mention];
-    });
-  }, [mentionSegments]);
-  useLayoutEffect(() => {
-    // Pin resolved identities so a catalog refresh cannot retarget an existing reference.
-    if (activeSessionMentions.length !== boundSessionMentions.length
-      || activeSessionMentions.some((mention, index) => mention !== boundSessionMentions[index])) {
-      setBoundSessionMentions(activeSessionMentions);
-    }
-  }, [activeSessionMentions, boundSessionMentions]);
   useLayoutEffect(() => {
     if (!draftKey || !draftStore || !draftAttachmentsReady) return;
     if (!draftText && images.length === 0 && !quotedContext) {
@@ -1534,21 +1475,12 @@ export function ThreadComposer({
     draftStore.set(draftKey, {
       text: draftText,
       files: images.map((image) => image.file),
-      sessionMentions: activeSessionMentions,
       quotedContext,
     }, persistDraft);
-  }, [activeSessionMentions, draftAttachmentsReady, draftKey, draftStore, images, persistDraft, quotedContext, draftText]);
-  const insertableSessionMentions = useMemo(() => availableSessionMentions.filter((mention) => {
-    const bound = activeSessionMentions.find(
-      (active) => active.name.toLowerCase() === mention.name.toLowerCase(),
-    );
-    return (!bound || bound.session_key === mention.session_key)
-      && (activeSessionMentions.length < SESSION_MENTIONS_LIMIT
-        || activeSessionMentions.some((active) => active.session_key === mention.session_key));
-  }), [activeSessionMentions, availableSessionMentions]);
+  }, [draftAttachmentsReady, draftKey, draftStore, images, persistDraft, quotedContext, draftText]);
   const filteredMentionCandidates = useMemo<MentionCandidate[]>(() => {
     if (!cliAppMention) return [];
-    const sessionCandidates: MentionCandidate[] = insertableSessionMentions
+    const sessionCandidates: MentionCandidate[] = sessionMentionCatalog
       .filter((mention) => [
         mention.name,
         mention.title,
@@ -1621,7 +1553,7 @@ export function ThreadComposer({
       remaining -= extra;
     }
     return groups.flatMap(({ candidates }, index) => candidates.slice(0, counts[index]));
-  }, [cliAppMention, cliApps, insertableSessionMentions, mcpPresets, sessionMentionCatalog]);
+  }, [cliAppMention, cliApps, mcpPresets, sessionMentionCatalog]);
 
   const showCliAppMenu = filteredMentionCandidates.length > 0;
   const showAnyPalette = showSlashMenu || showCliAppMenu;
@@ -1928,14 +1860,14 @@ export function ThreadComposer({
     setSessionDragPreview(null);
     if (interactionDisabled) return true;
     const sessionKey = readDraggedSession(event.dataTransfer);
-    const mention = insertableSessionMentions.find(
+    const mention = sessionMentionCatalog.find(
       (candidate) => candidate.session_key === (sessionKey ?? preview?.mention.session_key),
     );
     if (!mention) return true;
     const caret = preview?.start ?? rawSelection().start;
     insertMention(mention.name, caret, preview?.end ?? rawSelection().end);
     return true;
-  }, [insertableSessionMentions, insertMention, interactionDisabled, rawSelection, sessionDragPreview]);
+  }, [sessionMentionCatalog, insertMention, interactionDisabled, rawSelection, sessionDragPreview]);
 
   const previewSessionDrop = useCallback((event: React.DragEvent) => {
     if (!hasDraggedSession(event.dataTransfer)) return false;
@@ -1945,7 +1877,7 @@ export function ThreadComposer({
       return true;
     }
     const sessionKey = readDraggedSession(event.dataTransfer);
-    const mention = insertableSessionMentions.find(
+    const mention = sessionMentionCatalog.find(
       (candidate) => candidate.session_key === sessionKey,
     );
     if (!mention) {
@@ -1964,7 +1896,7 @@ export function ThreadComposer({
         : { mention, start, end }
     ));
     return true;
-  }, [insertableSessionMentions, interactionDisabled, rawSelection]);
+  }, [sessionMentionCatalog, interactionDisabled, rawSelection]);
 
   useEffect(() => {
     if (!sessionDragPreview) return;
@@ -1998,11 +1930,8 @@ export function ThreadComposer({
     if (sizes.reduce((sum, size) => sum + size, 0) > (ingressLimits?.attachments.max_total_bytes ?? MAX_TOTAL_ATTACHMENT_BYTES)) {
       return formatRejection("total_too_large");
     }
-    if ((prompt.sessionMentions?.length ?? 0) > SESSION_MENTIONS_LIMIT) {
-      return t("thread.composer.queued.tooManyMentions", { max: SESSION_MENTIONS_LIMIT });
-    }
     return null;
-  }, [formatRejection, ingressLimits, maxAttachments, maxTextBytes, t, textTooLargeMessage]);
+  }, [formatRejection, ingressLimits, maxAttachments, maxTextBytes, textTooLargeMessage]);
 
   const collectGuidancePrompt = useCallback((): QueuedPrompt => {
     queuedPromptCounterRef.current += 1;
@@ -2012,10 +1941,9 @@ export function ThreadComposer({
       images: readyImagesToQueuedImages(readyImages),
       ...(activeTurnId ? { autoAfterTurnId: activeTurnId } : {}),
       ...(normalizedQuotedContext ? { quotedContext: normalizedQuotedContext } : {}),
-      sessionMentions: activeSessionMentions,
     };
     return queuedPrompt ? mergeQueuedPrompt(queuedPrompt, prompt) : prompt;
-  }, [activeSessionMentions, activeTurnId, normalizedQuotedContext, queuedPrompt, readyImages, value]);
+  }, [activeTurnId, normalizedQuotedContext, queuedPrompt, readyImages, value]);
 
   const queueGuidancePrompt = useCallback(() => {
     if (!canQueueGuidance) return;
@@ -2043,7 +1971,6 @@ export function ThreadComposer({
     secondEnterPromptIdRef.current = null;
     setQueuedPrompt(null);
     replaceMentionInput(prompt.text, prompt.text.length);
-    setBoundSessionMentions(prompt.sessionMentions ?? []);
     setInlineError(null);
     setSlashMenuDismissed(false);
     setCliAppMenuDismissed(false);
@@ -2069,12 +1996,11 @@ export function ThreadComposer({
       const text = prompt.text.trim();
       const queuedImages = queuedImagesToSendImages(prompt.images);
       const options: SendOptions | undefined = (
-        extraOptions || prompt.quotedContext || prompt.sessionMentions?.length || isStreaming
+        extraOptions || prompt.quotedContext || isStreaming
       )
         ? {
             ...extraOptions,
             ...(prompt.quotedContext ? { quotedContext: prompt.quotedContext } : {}),
-            ...(prompt.sessionMentions?.length ? { sessionMentions: prompt.sessionMentions } : {}),
             ...(isStreaming ? { continueActiveTurn: true } : {}),
           }
         : undefined;
@@ -2133,22 +2059,17 @@ export function ThreadComposer({
     const options: SendOptions | undefined =
       attachedCliApps.length > 0
       || attachedMcpPresets.length > 0
-      || activeSessionMentions.length > 0
       || normalizedQuotedContext
         ? {
             ...(attachedCliApps.length > 0 ? { cliApps: attachedCliApps } : {}),
             ...(attachedMcpPresets.length > 0 ? { mcpPresets: attachedMcpPresets } : {}),
-            ...(activeSessionMentions.length > 0
-              ? { sessionMentions: activeSessionMentions }
-              : {}),
             ...(normalizedQuotedContext ? { quotedContext: normalizedQuotedContext } : {}),
           }
         : undefined;
     const hasPlainTextCommandPayload =
       payload === undefined
       && attachedCliApps.length === 0
-      && attachedMcpPresets.length === 0
-      && activeSessionMentions.length === 0;
+      && attachedMcpPresets.length === 0;
     const slashLifecycle = hasPlainTextCommandPayload
       ? slashCommandLifecycle(content, slashCommands)
       : null;
@@ -2222,7 +2143,6 @@ export function ThreadComposer({
   }, [
     activeCliMentionApps,
     activeMcpPresetMentions,
-    activeSessionMentions,
     canSend,
     draftKey,
     draftStore,

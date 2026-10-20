@@ -43,7 +43,7 @@ afterEach(() => {
 });
 
 describe("merged waiting messages", () => {
-  it("restores legacy entries as one message with all attachments, quotes and stable session targets", () => {
+  it("restores legacy entries as one text message with all attachments and quotes", () => {
     const alpha = mention("alpha");
     const beta = mention("beta");
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify([
@@ -63,7 +63,6 @@ describe("merged waiting messages", () => {
     ], {
       continueActiveTurn: true,
       quotedContext: "first quote\n\nsecond quote",
-      sessionMentions: [alpha, beta],
     });
   });
 
@@ -229,25 +228,19 @@ describe("merged waiting messages", () => {
     ]);
   });
 
-  it("retains a ninth session target in the input instead of silently dropping its reference", () => {
-    const mentions = Array.from({ length: 8 }, (_, index) => mention(`target${index}`));
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify([
-      { id: "first", text: mentions.map((item) => `@${item.name}`).join(" "), sessionMentions: mentions },
-    ]));
-    const onSend = vi.fn();
-    render(<ThreadComposer onSend={onSend} pendingQueueKey="chat-a" isStreaming sessions={[{
-      key: "websocket:target8", channel: "websocket", chatId: "target8", title: "Ninth chat", preview: "",
-      createdAt: null, updatedAt: null, handle: { id: `handle_${"a".repeat(32)}`, name: "target8" },
-    }]} />);
-    fireEvent.change(screen.getByLabelText("Message input"), { target: { value: "@target8" } });
-    fireEvent.mouseDown(screen.getByRole("option", { name: /target8/i }));
-    fireEvent.keyDown(screen.getByLabelText("Message input"), { key: "Enter" });
-    expect(screen.getByLabelText("Message input")).toHaveValue("@target8 ");
-    expect(screen.getByText("A message can mention up to 8 chats")).toBeInTheDocument();
-    expect(onSend).not.toHaveBeenCalled();
+  it("retains all queued handle text after a gateway rejection", async () => {
+    const text = "@bime、@luma";
+    const onSend = vi.fn().mockRejectedValue(new Error("A message can mention up to 8 chats"));
+    render(<ThreadComposer onSend={onSend} pendingQueueKey="chat-a" isStreaming />);
+    enter(text);
+    fireEvent.click(screen.getByRole("button", { name: "Send now" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("A message can mention up to 8 chats"));
+    expect(screen.getByRole("group", { name: "Waiting to send" })).toHaveTextContent(text);
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!)[0]).toMatchObject({ text, autoPaused: true });
+    expect(onSend).toHaveBeenCalledWith(text, undefined, { continueActiveTurn: true });
   });
 
-  it("keeps all legacy session targets after editing and refreshing an over-limit draft", () => {
+  it("keeps all legacy handle text after editing and refreshing a draft without a catalog", () => {
     const targets = Array.from({ length: 9 }, (_, index) => mention(`target${index}`));
     const text = targets.map((item) => `@${item.name}`).join(" ");
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify([
@@ -260,11 +253,11 @@ describe("merged waiting messages", () => {
     fireEvent.click(screen.getByRole("button", { name: "Edit message" }));
     view.unmount();
     const refreshed = new ComposerDraftStore();
-    expect(refreshed.get("chat-a", true)?.sessionMentions).toEqual(targets);
+    const restoredText = `${text.slice(0, text.lastIndexOf(" "))}\n@target8`;
+    expect(refreshed.get("chat-a", true)?.text).toBe(restoredText);
     render(<ThreadComposer {...props} draftStore={refreshed} />);
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
-    expect(screen.getByText("A message can mention up to 8 chats")).toBeInTheDocument();
-    expect(onSend).not.toHaveBeenCalled();
+    expect(onSend).toHaveBeenCalledWith(restoredText, undefined, undefined);
   });
 
   it("retains the whole message after a rejected immediate send", () => {

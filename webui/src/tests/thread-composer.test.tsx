@@ -2116,7 +2116,7 @@ describe("ThreadComposer", () => {
     });
   });
 
-  it.each(["typed", "pasted"])("attaches %s session handles without selecting a candidate", async (entry) => {
+  it.each(["typed", "pasted"])("highlights %s session handles and sends only the original text", async (entry) => {
     const user = userEvent.setup();
     const onSend = vi.fn();
     const targets = [session("pricing", "Pricing", "", "bime"), session("notes", "Notes", "", "bari")];
@@ -2133,14 +2133,7 @@ describe("ThreadComposer", () => {
     expect(screen.getAllByTestId("composer-session-mention-bime")).toHaveLength(2);
     expect(screen.getByTestId("composer-session-mention-bari")).toHaveTextContent("@BARI");
     await user.click(screen.getByRole("button", { name: "Send message" }));
-    expect(onSend).toHaveBeenCalledWith(text, undefined, {
-      sessionMentions: targets.map((target) => ({
-        id: target.handle?.id,
-        name: target.handle?.name,
-        session_key: target.key,
-        title: target.title,
-      })),
-    });
+    expect(onSend).toHaveBeenCalledWith(text, undefined, undefined);
   });
 
   it.each(["typed", "pasted"])("recognizes %s session handles separated by punctuation without spaces", async (entry) => {
@@ -2160,11 +2153,7 @@ describe("ThreadComposer", () => {
     expect(screen.getByTestId("composer-session-mention-bime")).toHaveTextContent("@bime");
     expect(screen.getAllByTestId("composer-session-mention-luma")).toHaveLength(2);
     await user.click(screen.getByRole("button", { name: "Send message" }));
-    expect(onSend).toHaveBeenCalledWith(text, undefined, {
-      sessionMentions: targets.map((target) => ({
-        id: target.handle?.id, name: target.handle?.name, session_key: target.key, title: target.title,
-      })),
-    });
+    expect(onSend).toHaveBeenCalledWith(text, undefined, undefined);
   });
 
   it.each(["、", ",", "："])("completes a session handle after %s without inserting a leading space", (separator) => {
@@ -2180,11 +2169,7 @@ describe("ThreadComposer", () => {
     expect(input).toHaveValue(`@bime${separator}@luma `);
     expect(screen.getByTestId("composer-session-mention-luma")).toHaveTextContent("@luma");
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
-    expect(onSend).toHaveBeenCalledWith(`@bime${separator}@luma`, undefined, {
-      sessionMentions: targets.map((target) => ({
-        id: target.handle?.id, name: target.handle?.name, session_key: target.key, title: target.title,
-      })),
-    });
+    expect(onSend).toHaveBeenCalledWith(`@bime${separator}@luma`, undefined, undefined);
   });
 
   it("previews and drops a session after punctuation without changing the surrounding text", () => {
@@ -2201,11 +2186,7 @@ describe("ThreadComposer", () => {
     fireEvent.drop(input, { dataTransfer });
     expect(input).toHaveValue("@bime、@luma ");
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
-    expect(onSend).toHaveBeenCalledWith("@bime、@luma", undefined, {
-      sessionMentions: targets.map((target) => ({
-        id: target.handle?.id, name: target.handle?.name, session_key: target.key, title: target.title,
-      })),
-    });
+    expect(onSend).toHaveBeenCalledWith("@bime、@luma", undefined, undefined);
   });
 
   it("leaves unknown handles, partial names, titles and embedded email or path handles as plain text", () => {
@@ -2232,9 +2213,7 @@ describe("ThreadComposer", () => {
     expect(screen.queryByTestId("composer-session-mention-bime")).not.toBeInTheDocument();
     expect(screen.getByTestId("composer-session-mention-bari")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
-    expect(onSend).toHaveBeenCalledWith("@bim @bari", undefined, {
-      sessionMentions: [{ id: target.handle?.id, name: "bari", session_key: target.key, title: "Notes" }],
-    });
+    expect(onSend).toHaveBeenCalledWith("@bim @bari", undefined, undefined);
   });
 
   it("gives typed session handles the same priority over App and MCP names as the palette", () => {
@@ -2249,14 +2228,10 @@ describe("ThreadComposer", () => {
     expect(screen.queryByTestId("composer-cli-mention-gimp")).not.toBeInTheDocument();
     expect(screen.queryByTestId("composer-mcp-mention-bari")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
-    expect(onSend).toHaveBeenCalledWith("@gimp @bari", undefined, {
-      sessionMentions: targets.map((target) => ({
-        id: target.handle?.id, name: target.handle?.name, session_key: target.key, title: target.title,
-      })),
-    });
+    expect(onSend).toHaveBeenCalledWith("@gimp @bari", undefined, undefined);
   });
 
-  it("attaches persisted sessions through the shared mention palette", () => {
+  it("inserts a session handle as text through the shared mention palette", () => {
     const onSend = vi.fn();
     render(
       <ThreadComposer
@@ -2284,17 +2259,10 @@ describe("ThreadComposer", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
 
-    expect(onSend).toHaveBeenCalledWith("参考 @收费设计", undefined, {
-      sessionMentions: [{
-        id: session("pricing", "收费设计").handle?.id,
-        name: "收费设计",
-        session_key: "websocket:pricing",
-        title: "收费设计",
-      }],
-    });
+    expect(onSend).toHaveBeenCalledWith("参考 @收费设计", undefined, undefined);
   });
 
-  it("turns a dropped sidebar session into the shared structured mention", () => {
+  it("inserts a dropped sidebar session handle as editable text", () => {
     const onSend = vi.fn();
     render(
       <ThreadComposer
@@ -2338,14 +2306,7 @@ describe("ThreadComposer", () => {
       .toHaveTextContent("@收费设计");
 
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
-    expect(onSend).toHaveBeenCalledWith("Compare @收费设计 notes", undefined, {
-      sessionMentions: [{
-        id: session("pricing", "收费设计").handle?.id,
-        name: "收费设计",
-        session_key: "websocket:pricing",
-        title: "收费设计",
-      }],
-    });
+    expect(onSend).toHaveBeenCalledWith("Compare @收费设计 notes", undefined, undefined);
   });
 
   it("rejects self-session drops that are unavailable to the composer", () => {
@@ -2370,59 +2331,19 @@ describe("ThreadComposer", () => {
     expect(screen.queryByTestId("composer-session-drag-preview")).not.toBeInTheDocument();
   });
 
-  it.each([" ", "、"])("rejects more than eight typed session references separated by %j without silently dropping them", (separator) => {
-    const onSend = vi.fn();
-    const targets = Array.from({ length: 9 }, (_, index) => session(`topic-${index}`, `Topic${index}`));
-    render(<ThreadComposer onSend={onSend} sessions={targets} />);
+  it("retains the complete text when the gateway rejects a send", async () => {
+    const text = "@bime、@luma";
+    const onSend = vi.fn().mockRejectedValue(new Error("A message can mention up to 8 chats"));
+    render(<ThreadComposer onSend={onSend} />);
     const input = screen.getByLabelText("Message input");
-    const handles = targets.map((target) => `@${target.handle?.name}`);
-    fireEvent.change(input, { target: { value: handles.join(separator) } });
-
-    for (const target of targets) {
-      expect(screen.getByTestId(`composer-session-mention-${target.handle?.name}`)).toBeInTheDocument();
-    }
+    fireEvent.change(input, { target: { value: text } });
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
-    expect(onSend).not.toHaveBeenCalled();
-    expect(screen.getByRole("alert")).toHaveTextContent("A message can mention up to 8 chats");
-
-    fireEvent.change(input, { target: { value: handles.slice(1).join(separator) } });
-    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
-    expect(onSend.mock.calls[0]?.[2].sessionMentions.map((mention: { session_key: string }) => mention.session_key))
-      .toEqual(targets.slice(1).map((target) => target.key));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("A message can mention up to 8 chats"));
+    expect(input).toHaveValue(text);
+    expect(onSend).toHaveBeenCalledWith(text, undefined, undefined);
   });
 
-  it.each(["palette", "drop"])("releases the eight-session limit for %s insertion when a mention is removed", (entry) => {
-    const onSend = vi.fn();
-    const targets = Array.from({ length: 9 }, (_, index) => session(`topic-${index}`, `Topic${index}`, "", `ref${index}x`));
-    render(<ThreadComposer onSend={onSend} sessions={targets} />);
-    const input = screen.getByLabelText("Message input") as HTMLTextAreaElement;
-    const text = `${targets.slice(0, 8).map((target) => `@${target.handle?.name}`).join(" ")} @ref8`;
-    fireEvent.change(input, { target: { value: text, selectionStart: text.length } });
-    expect(screen.queryByRole("option", { name: /@ref8x/i })).not.toBeInTheDocument();
-    const dataTransfer = { types: [SESSION_DRAG_TYPE], files: [], getData: () => targets[8].key };
-    if (entry === "drop") {
-      fireEvent.dragOver(input, { dataTransfer });
-      expect(screen.queryByTestId("composer-session-drag-preview")).not.toBeInTheDocument();
-      fireEvent.drop(input, { dataTransfer });
-      expect(input).toHaveValue(text);
-    }
-
-    const replacement = input.value.replace("@ref0x ", "");
-    fireEvent.change(input, { target: { value: replacement, selectionStart: replacement.length } });
-    expect(screen.getByRole("option", { name: /@ref8x/i })).toBeInTheDocument();
-    if (entry === "palette") fireEvent.keyDown(input, { key: "Tab" });
-    else {
-      input.setSelectionRange(replacement.lastIndexOf("@"), replacement.length);
-      fireEvent.dragOver(input, { dataTransfer });
-      expect(screen.getByTestId("composer-session-drag-preview")).toHaveTextContent("@ref8x");
-      fireEvent.drop(input, { dataTransfer });
-    }
-    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
-    expect(onSend.mock.calls[0]?.[2].sessionMentions.map((mention: { session_key: string }) => mention.session_key))
-      .toEqual(targets.slice(1).map((target) => target.key));
-  });
-
-  it.each(["typed", "selected"])("keeps a %s session stable across refreshes and queued guidance", (entry) => {
+  it.each(["typed", "selected"])("preserves %s handle text across catalog refreshes and queued guidance", (entry) => {
     const onSend = vi.fn();
     const target = session("z-target", "Plan", "Original plan");
     const { rerender } = render(
@@ -2458,55 +2379,7 @@ describe("ThreadComposer", () => {
     fireEvent.keyDown(input, { key: "Enter" });
     fireEvent.click(screen.getByRole("button", { name: "Send now" }));
 
-    expect(onSend).toHaveBeenCalledWith("@Plan", undefined, {
-      sessionMentions: [{
-        id: session("z-target", "Plan").handle?.id,
-        name: "Plan",
-        session_key: "websocket:z-target",
-        title: "Plan",
-      }],
-      continueActiveTurn: true,
-    });
-  });
-
-  it.each(["palette", "drop"])("prevents %s insertion from retargeting a draft when a handle is reused", (entry) => {
-    const onSend = vi.fn();
-    const original = session("original", "Original plan", "", "bime");
-    const replacement = session("replacement", "New plan", "", "bime");
-    const composer = (target: ChatSummary) => <ThreadComposer onSend={onSend} sessions={[target]} />;
-    const { rerender } = render(composer(original));
-    const input = screen.getByLabelText("Message input") as HTMLTextAreaElement;
-    fireEvent.change(input, { target: { value: "@bime " } });
-    rerender(composer(replacement));
-    const dataTransfer = { types: [SESSION_DRAG_TYPE], files: [], getData: () => replacement.key };
-
-    if (entry === "palette") {
-      fireEvent.change(input, { target: { value: "@bime @bi", selectionStart: 9 } });
-      expect(screen.queryByRole("option", { name: /@bime/i })).not.toBeInTheDocument();
-    } else {
-      fireEvent.dragOver(input, { dataTransfer });
-      expect(screen.queryByTestId("composer-session-drag-preview")).not.toBeInTheDocument();
-      fireEvent.drop(input, { dataTransfer });
-      expect(input).toHaveValue("@bime ");
-    }
-    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
-    expect(onSend.mock.calls[0]?.[2].sessionMentions).toEqual([{
-      id: original.handle?.id, name: "bime", session_key: original.key, title: original.title,
-    }]);
-
-    if (entry === "palette") {
-      fireEvent.change(input, { target: { value: "@bi", selectionStart: 3 } });
-      expect(screen.getByRole("option", { name: /@bime/i })).toBeInTheDocument();
-      fireEvent.keyDown(input, { key: "Tab" });
-    } else {
-      fireEvent.dragOver(input, { dataTransfer });
-      expect(screen.getByTestId("composer-session-drag-preview")).toHaveTextContent("@bime");
-      fireEvent.drop(input, { dataTransfer });
-    }
-    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
-    expect(onSend.mock.calls[1]?.[2].sessionMentions).toEqual([{
-      id: replacement.handle?.id, name: "bime", session_key: replacement.key, title: replacement.title,
-    }]);
+    expect(onSend).toHaveBeenCalledWith("@Plan", undefined, { continueActiveTurn: true });
   });
 
   it("opens skills only from a $ reference and prioritizes the skill name", () => {
@@ -4142,11 +4015,9 @@ describe("session composer drafts", () => {
     render(composer([], new ComposerDraftStore()));
 
     expect(screen.getByLabelText("Message input")).toHaveValue("参考 @bime");
-    expect(screen.getByTestId("composer-session-mention-bime")).toBeInTheDocument();
+    expect(screen.queryByTestId("composer-session-mention-bime")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
-    expect(onSend).toHaveBeenCalledWith("参考 @bime", undefined, {
-      sessionMentions: [{ id: target.handle?.id, name: "bime", session_key: target.key, title: "Pricing" }],
-    });
+    expect(onSend).toHaveBeenCalledWith("参考 @bime", undefined, undefined);
   });
 
   it("restores independent drafts across session switches and remounts", () => {
