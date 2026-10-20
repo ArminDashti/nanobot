@@ -450,7 +450,7 @@ def _records_with_replay_identity(
     ]
 
 
-def _write_records_to_path(path: Path, rows: list[dict[str, Any]]) -> None:
+def write_transcript_records_to_path(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     lines: list[str] = []
     for row in rows:
@@ -649,7 +649,7 @@ def _append_segment_turns(session_key: str, turns: list[list[dict[str, Any]]]) -
             nonlocal next_id
             segment_id = f"{next_id:06d}"
             path = _segment_file_path(session_key, segment_id)
-            _write_records_to_path(path, _flatten_turns(batch))
+            write_transcript_records_to_path(path, _flatten_turns(batch))
             entries.append({
                 "id": segment_id,
                 "bytes": path.stat().st_size,
@@ -692,7 +692,7 @@ def _rotate_active_transcript_if_needed(session_key: str) -> None:
     turns = _split_transcript_turns(lines)
     turns, compacted_delta_records = _compact_completed_turns(turns)
     if compacted_delta_records:
-        _write_records_to_path(path, _flatten_turns(turns))
+        write_transcript_records_to_path(path, _flatten_turns(turns))
         try:
             if path.stat().st_size <= _ACTIVE_TRANSCRIPT_ROTATE_BYTES:
                 return
@@ -716,7 +716,7 @@ def _rotate_active_transcript_if_needed(session_key: str) -> None:
     if not moved:
         return
     _append_segment_turns(session_key, moved)
-    _write_records_to_path(path, _flatten_turns(kept))
+    write_transcript_records_to_path(path, _flatten_turns(kept))
 
 
 def _chunk_ids(session_key: str) -> list[str]:
@@ -758,7 +758,7 @@ def _compact_segment_turns(
 
         entries = _load_segment_manifest_entries(session_key)
         path = _segment_file_path(session_key, chunk_id)
-        _write_records_to_path(path, _flatten_turns(compacted))
+        write_transcript_records_to_path(path, _flatten_turns(compacted))
         if entries is None:
             _rebuild_segment_manifest(session_key, stats=stats)
         else:
@@ -1089,7 +1089,7 @@ def read_transcript_lines(session_key: str) -> list[dict[str, Any]]:
 def _write_transcript_lines(session_key: str, rows: list[dict[str, Any]]) -> None:
     delete_webui_transcript(session_key)
     path = webui_transcript_path(session_key)
-    _write_records_to_path(path, rows)
+    write_transcript_records_to_path(path, rows)
     _rotate_active_transcript_if_needed(session_key)
 
 
@@ -1133,7 +1133,7 @@ def _compact_active_completed_streams(session_key: str) -> None:
         _split_transcript_turns(_read_transcript_file(path))
     )
     if compacted_delta_records:
-        _write_records_to_path(path, _flatten_turns(turns))
+        write_transcript_records_to_path(path, _flatten_turns(turns))
 
 
 @guarded_transcript

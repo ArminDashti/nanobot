@@ -1197,7 +1197,8 @@ class WebSocketChannel(BaseChannel):
     async def _persist_turn_stream_event(self, chat_id: str, event: dict[str, Any], **kwargs: Any) -> bool:
         # Deltas only allocate a sequence, while completed segments touch files.
         if event.get("event") in {"delta", "reasoning_delta"}:
-            generation = (kwargs.get("metadata") or {}).get("_webui_history_generation")
+            metadata: dict[str, Any] = kwargs.get("metadata") or {}
+            generation = metadata.get("_webui_history_generation")
             if generation:
                 event["history_generation"] = generation
             return self._write_turn_stream_event(chat_id, event, **kwargs)

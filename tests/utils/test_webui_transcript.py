@@ -693,7 +693,7 @@ def test_page_read_compacts_legacy_immutable_segment(tmp_path, monkeypatch) -> N
         {"event": "turn_end", "chat_id": "compact-segment"},
     ]
     segment_path = transcript_module._segment_file_path(key, segment_id)
-    transcript_module._write_records_to_path(segment_path, rows)
+    transcript_module.write_transcript_records_to_path(segment_path, rows)
     transcript_module._write_segment_manifest(
         key,
         [transcript_module._segment_manifest_entry(key, segment_id)],
