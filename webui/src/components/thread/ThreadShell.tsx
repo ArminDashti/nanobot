@@ -2100,7 +2100,7 @@ export function ThreadShell({
               viewportRef.current?.cancelAutoScroll();
               viewportRef.current?.jumpToUserPrompt(messageId);
             }}
-            enabled={!temporary && messagesReady && webuiCapabilities.includes("webui.chat.edit.v1")}>
+            enabled={!temporary && messagesReady}>
           <ThreadViewport
             ref={viewportRef}
             messages={displayMessages}

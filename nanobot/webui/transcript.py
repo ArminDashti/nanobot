@@ -1421,6 +1421,7 @@ def write_session_messages_as_transcript(
     _write_transcript_lines(target_key, rows)
 
 
+@guarded_transcript
 def delete_webui_transcript(session_key: str) -> bool:
     _ACTIVE_TRANSCRIPTS_WITH_DELTAS.discard(session_key)
     removed = False
