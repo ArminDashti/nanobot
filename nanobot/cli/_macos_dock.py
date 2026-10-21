@@ -45,12 +45,14 @@ def _browser_script(bundle_id: str, url: str) -> str | None:
     quoted_root = _applescript_string(_browser_root(url))
     quoted_url = _applescript_string(url)
     if bundle_id == "com.google.Chrome":
-        select_tab = "set active tab index of w to tabIndex\nset minimized of w to false"
+        select_tab = "set active tab index of targetWindow to tabIndex\nset minimized of targetWindow to false"
         create_window = f"set newWindow to make new window\nset URL of active tab of newWindow to {quoted_url}\nset newWindowID to id of newWindow"
     else:
-        select_tab = "set current tab of w to t\nset miniaturized of w to false"
+        select_tab = "set current tab of targetWindow to tab tabIndex of targetWindow\nset miniaturized of targetWindow to false"
         create_window = f"make new document with properties {{URL:{quoted_url}}}\nset newWindowID to id of window 1"
-    return f'''with timeout of 5 seconds
+    # A repeat variable refers to an item of the live windows list. Activation or
+    # deminimization reorders that list, so capture a stable ID before either.
+    return f'''with timeout of 15 seconds
 considering case
 tell application id "{bundle_id}"
     repeat with w in windows
@@ -60,9 +62,11 @@ tell application id "{bundle_id}"
             set address to URL of t
             if address is not missing value then
                 if address is {quoted_root} or address starts with {quoted_root} & "/" or address starts with {quoted_root} & "?" or address starts with {quoted_root} & "#" then
+                    set targetWindowID to id of w
+                    set targetWindow to window id targetWindowID
                     activate
                     {select_tab}
-                    set index of w to 1
+                    set index of targetWindow to 1
                     return true
                 end if
             end if
