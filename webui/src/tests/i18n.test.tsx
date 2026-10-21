@@ -178,6 +178,35 @@ const LOCALIZED_SETTINGS_COPY_KEYS = [
   "settings.help.codeWrap",
   "settings.help.brandLogos",
   "settings.help.browserNotifications",
+  "settings.nav.notifications",
+  "settings.notifications.scope",
+  "settings.notifications.intro",
+  "settings.notifications.pageRequired",
+  "settings.notifications.revoked",
+  "settings.notifications.retry",
+  "settings.notifications.statusOff",
+  "settings.notifications.statusPermission",
+  "settings.notifications.statusOn",
+  "settings.notifications.statusBlocked",
+  "settings.notifications.statusRevoked",
+  "settings.notifications.statusUnavailable",
+  "settings.notifications.statusWorker",
+  "settings.notifications.statusBusy",
+  "settings.notifications.statusError",
+  "settings.notifications.test",
+  "settings.notifications.testBody",
+  "settings.notifications.waiting",
+  "settings.notifications.insecure",
+  "settings.notifications.unsupported",
+  "settings.notifications.denied",
+  "settings.notifications.dismissed",
+  "settings.notifications.permissionFailed",
+  "settings.notifications.workerUnavailable",
+  "settings.notifications.displayFailed",
+  "settings.notifications.submitted",
+  "settings.notifications.completed",
+  "settings.notifications.failed",
+  "settings.notifications.interrupted",
   "settings.help.notificationSound",
   "settings.help.currentModel",
   "settings.help.localServiceAccess",
@@ -405,6 +434,15 @@ describe("webui i18n", () => {
       expect(notice?.textContent).toBe(copy[phase]);
       expect(notice).toHaveAttribute("aria-busy", String(phase === "started"));
     }
+    for (const reason of ["idle", "context_pressure", "manual", "provider_native"] as const) {
+      for (const phase of ["started", "succeeded", "failed", "cancelled"] as const) {
+        rerender(<ContextCompactionNotice compaction={{ id: "compact-1", reason, phase, announce: true }} />);
+        const notice = container.querySelector("[data-context-compaction]");
+        expect(copy.reasons[reason][phase]).toBeTruthy();
+        expect(notice?.textContent).toBe(copy.reasons[reason][phase]);
+        expect(notice).toHaveAttribute("aria-busy", String(phase === "started"));
+      }
+    }
     for (const compactReply of ["empty", "failed"] as const) {
       rerender(<MessageBubble message={{
         id: "reply", role: "assistant", content: "original command reply",
@@ -625,7 +663,9 @@ describe("webui i18n", () => {
         ...LOCALIZED_CHANNEL_SHELL_KEYS,
         ...LOCALIZED_NEW_SURFACE_KEYS,
       ].filter(
-        (key) => current.get(key) === english.get(key),
+        // “Notifications” is also the native French label.
+        (key) => current.get(key) === english.get(key)
+          && !(locale === "fr" && key === "settings.nav.notifications"),
       );
 
       expect({ locale, leaked }).toEqual({ locale, leaked: [] });

@@ -52,14 +52,17 @@ for (const width of [390, 1440]) {
           await page.goto(fixture(surface));
           const loaded = page.locator(loadedSelector).first();
           const row = await box(loaded);
-          const icon = await box(surface === "channels" ? loaded.locator('[data-testid^="channel-logo"]') : loaded.locator(":scope > :first-child"));
+          const icon = await box(surface === "channels" ? loaded.locator('[data-testid^="channel-logo"]')
+            : loaded.locator(surface === "apps" ? ":scope > :first-child > :first-child" : ":scope > :first-child"));
           const title = await box(loaded.locator("h3"));
           const action = width === 1440 || surface !== "skills" ? await box(loaded.locator(":scope > :last-child")) : null;
           await page.goto(fixture(surface, true));
           const skeleton = status(page).locator(loadingSelector).first();
           sameBox(await box(skeleton), row);
-          sameBox(await box(skeleton.locator(":scope > :first-child")), icon);
-          const placeholder = await box(skeleton.locator(":scope > :nth-child(2) [class*='bg-muted-foreground']").first());
+          sameBox(await box(skeleton.locator(surface === "apps" ? ":scope > :first-child > :first-child" : ":scope > :first-child")), icon);
+          const placeholder = await box(skeleton.locator(surface === "apps"
+            ? ":scope > :first-child > :nth-child(2) [class*='bg-muted-foreground']"
+            : ":scope > :nth-child(2) [class*='bg-muted-foreground']").first());
           expect(placeholder.x).toBe(title.x);
           expect(placeholder.y + placeholder.height / 2).toBe(title.y + title.height / 2);
           if (action) sameBox(await box(skeleton.locator(":scope > :last-child")), action);
@@ -187,8 +190,12 @@ for (const width of [390, 1440]) {
         } finally { release(); }
       });
 
-      test("file preview skeletons follow code gutters and Markdown controls", async ({ page }) => {
+      for (const readingTextSize of ["small", "standard", "large"] as const) test(`file preview skeletons follow code gutters and Markdown controls: ${readingTextSize}`, async ({ page }) => {
+        await page.addInitScript((size) => {
+          localStorage.setItem("nanobot-webui.settings-preferences", JSON.stringify({ schemaVersion: 1, readingTextSize: size }));
+        }, readingTextSize);
         await page.goto(fixture("file"));
+        await expect(page.locator("html")).toHaveAttribute("data-reading-text-size", readingTextSize);
         await expect(page.getByTestId("viewport-code-rows")).toBeVisible();
         const source = await box(page.locator("pre"));
         const code = await box(page.locator("[data-highlighted]"));
@@ -202,7 +209,8 @@ for (const width of [390, 1440]) {
         const controls = await box(page.getByTestId("file-preview-panel").locator(":scope > div").first());
         await page.goto(fixture("markdown", true));
         sameBox(await box(status(page).locator("[aria-hidden] > .flex").first()), controls);
-        const title = await box(status(page).locator(".h-7 > div"));
+        const title = await box(status(page).locator("[data-file-preview-heading-skeleton]"));
+        sameBox(title, heading);
         expect(title.x).toBe(heading.x);
         expect(title.y + title.height / 2).toBe(heading.y + heading.height / 2);
         await noOverflow(page);

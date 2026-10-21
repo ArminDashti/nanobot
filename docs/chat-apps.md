@@ -97,7 +97,7 @@ If `nanobot channels status` does not show the channel as enabled, the config sn
 | **Slack** | Bot token + App-Level token |
 | **Matrix** | Homeserver URL + Access token |
 | **Email** | IMAP/SMTP credentials |
-| **QQ** | App ID + App Secret |
+| **QQ** | QR code scan (`nanobot channels login qq`) or App ID + App Secret |
 | **Napcat (QQ)** | Napcat Forward WebSocket URL + access token |
 | **Wecom** | Bot ID + Bot Secret |
 | **Microsoft Teams** | App ID + App Password + public HTTPS endpoint |
@@ -127,7 +127,7 @@ See the [native Linear agent guide](./guides/linear-agent.md) for the complete s
 
 1. Create a bot with `@BotFather` and copy its token.
 2. Run `nanobot webui`, then open **Channels → Telegram**.
-3. Paste the token. If the gateway cannot reach Telegram directly, expand **Advanced** and add an HTTP or SOCKS proxy.
+3. Paste the token. If the gateway cannot reach Telegram directly, set the address in **Settings → Advanced → Shared proxy**, then enable **Use proxy** in Telegram's advanced options.
 4. Save and enable Telegram, then send the bot a direct message.
 
 The configuration badge means nanobot found a saved token. The live connection check is separate, so a temporary Telegram or proxy outage does not make an existing configuration disappear. Saved tokens and proxy URLs remain masked.
@@ -161,13 +161,14 @@ nanobot plugins enable telegram
 }
 ```
 
-If the gateway cannot reach Telegram directly, add a proxy to the same section:
+If the gateway cannot reach Telegram directly, set the shared address and enable it for Telegram:
 
 ```json
 {
+  "network": { "proxy": "http://127.0.0.1:7890" },
   "channels": {
     "telegram": {
-      "proxy": "http://127.0.0.1:7890"
+      "useProxy": true
     }
   }
 }
@@ -608,6 +609,14 @@ nanobot plugins enable qq
 - Once added, scan the bot's QR code with mobile QQ → open the bot profile → tap "发消息" to start chatting
 
 **3. Configure**
+
+Run the QR login and scan with mobile QQ to save the AppID and AppSecret automatically. Scanning again replaces the App Secret and stops the previous secret from working:
+
+```bash
+nanobot channels login qq
+```
+
+To enter them yourself, copy **AppID** and **AppSecret** from **开发设置 (Developer Settings)** into `channels.qq`:
 
 > - `allowFrom`: Add your openid (find it in nanobot logs when you message the bot). Use `["*"]` for public access.
 > - `msgFormat`: Optional. Use `"plain"` (default) for maximum compatibility with legacy QQ clients, or `"markdown"` for richer formatting on newer clients.

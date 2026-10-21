@@ -1,8 +1,7 @@
-import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { MoreHorizontal } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { MessageBlockMenuActions, MessageBubble, MessageCopyButton } from "@/components/MessageBubble";
-import { MessageLinksMenu, useMessageWebLinks } from "@/components/MessageLinksMenu";
 import { FallbackResponseSources } from "@/components/ResponseSourceBadge";
 import {
   AgentActivityCluster,
@@ -24,6 +23,8 @@ import type { CliAppInfo, McpPresetInfo, RetryStatus, SlashCommand, UIMessage } 
 interface ThreadMessagesProps {
   messages: UIMessage[];
   beforeMessages?: ReactNode;
+  beforeUnit?: { key: string; content: ReactNode };
+  topInset?: number;
   afterUserMessage?: (message: UIMessage) => ReactNode;
   afterMessages?: ReactNode;
   temporary?: boolean;
@@ -82,6 +83,8 @@ export function assistantForkFlags(units: DisplayUnit[]): boolean[] {
 export function ThreadMessages({
   messages,
   beforeMessages,
+  beforeUnit,
+  topInset = 0,
   afterUserMessage,
   afterMessages,
   temporary = false,
@@ -180,6 +183,11 @@ export function ThreadMessages({
     setOpenContextBlockKey((current) => open ? key : current === key ? null : current);
   }, []);
   let nextUserIndex = hiddenUserMessageCount;
+  const preludeIndex = Math.max(0, beforeUnit ? unitKeys.indexOf(beforeUnit.key) : 0);
+  const inset = topInset > 0 ? <div aria-hidden style={{ height: topInset }} /> : null;
+  const preludeInset = preludeIndex === 0 ? inset : null;
+  const renderPrelude = (prefix: ReactNode, marginTop?: string) => prefix || preludeInset || beforeMessages
+    ? <div key="thread-prelude" className={cn("flow-root", marginTop)}>{prefix}{preludeInset}{beforeMessages}</div> : null;
 
   return (
     <div ref={messageListRef} className="flex w-full flex-col">
@@ -187,8 +195,10 @@ export function ThreadMessages({
         containerRef={messageListRef}
         onQuoteSelection={onQuoteSelection}
       />
-      {beforeMessages}
-      {units.map((unit, index) => {
+      {[
+        preludeIndex > 0 ? <Fragment key="top-inset">{inset}</Fragment> : null,
+        units.length === 0 ? renderPrelude(null) : null,
+        ...units.flatMap((unit, index) => {
         const next = units[index + 1];
         const hasBodyBelow =
           unit.type === "activity"
@@ -240,14 +250,17 @@ export function ThreadMessages({
           && unit.message.deliveryStatus !== "failed"
         ) nextUserIndex += 1;
 
-        return (
-          <Fragment key={unitKeys[index]}>
+        const prefix = beforeUnit?.key === unitKeys[index] ? beforeUnit.content : null;
+        const prelude = index === preludeIndex ? renderPrelude(prefix, marginTop) : null;
+        return [
+          prelude,
+          <Fragment key={`unit:${unitKeys[index]}`}>
           <ThreadDisplayUnit
             key={unitKeys[index]}
             unitKey={unitKeys[index]}
             unit={unit}
             mobileActions={mobileActions}
-            marginTop={marginTop}
+            marginTop={prelude ? "" : marginTop}
             userPromptId={userPromptId}
             userIndex={userIndex}
             hasBodyBelow={hasBodyBelow}
@@ -287,9 +300,9 @@ export function ThreadMessages({
           {unit.type === "message" && unit.message.role === "user" ? (
             afterUserMessage?.(unit.message)
           ) : null}
-          </Fragment>
-        );
-      })}
+          </Fragment>,
+        ];
+      })]}
       {missingEditSource ? <div className={cn("thread-message-row", units.length > 0 && "mt-5")}>
         <MessageBubble message={editDraft.message} textEditor={<InlineMessageEditor sourceMissing />} />
       </div> : null}
@@ -393,7 +406,6 @@ interface ThreadDisplayUnitProps {
 
 interface MessageBlockMenuProps {
   mobileActions: boolean;
-  messageRoot: RefObject<HTMLElement>;
   message: UIMessage;
   isTurnStreaming: boolean;
   contextBlockKey: string;
@@ -414,7 +426,6 @@ interface MessageBlockMenuProps {
 
 function MessageBlockMenu({
   mobileActions,
-  messageRoot,
   message,
   isTurnStreaming,
   contextBlockKey,
@@ -431,9 +442,6 @@ function MessageBlockMenu({
   const contentRef = useRef<HTMLDivElement>(null);
   const editingRef = useRef(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const links = useMessageWebLinks(messageRoot, open);
-  const [linksShown, setLinksShown] = useState(false);
-  useEffect(() => { if (!open) setLinksShown(false); }, [open]);
   const [triggerHeight, setTriggerHeight] = useState(28);
   useLayoutEffect(() => {
     const trigger = triggerRef.current;
@@ -454,10 +462,7 @@ function MessageBlockMenu({
   // Re-evaluated when this message becomes active, including after an overnight idle.
   const shortTime = mobileActions ? "" : formatMessageHoverTime(timestamp);
   const fullTime = shortTime ? fmtDateTime(timestamp) : "";
-  const actions = linksShown && links.length > 0 ? <MessageLinksMenu links={links}
-    expanded={mobileActions}
-    onBack={() => { setLinksShown(false); contentRef.current?.focus({ preventScroll: true }); }}
-    onClose={() => onOpenChange(false)} /> : <MessageBlockMenuActions
+  const actions = <MessageBlockMenuActions
     message={message}
     isTurnStreaming={isTurnStreaming}
     onForkFromHere={onForkFromHere ? () => { if (mobileActions) onOpenChange(false); onForkFromHere(); } : undefined}
@@ -465,7 +470,6 @@ function MessageBlockMenu({
     onEdit={onEdit ? () => { editingRef.current = true; onOpenChange(false); onEdit(); } : undefined}
     editDisabledReason={editDisabledReason}
     sheet={mobileActions}
-    onViewLinks={links.length > 0 ? () => setLinksShown(true) : undefined}
   />;
   if (mobileActions) {
     return <div data-message-mobile-actions className={cn("mt-1 flex items-center", message.role === "user" ? "me-2 justify-end" : "-ms-2")}>
@@ -622,7 +626,8 @@ const ThreadDisplayUnit = memo(function ThreadDisplayUnit({
   useEffect(() => {
     const element = elementRef.current;
     if (!element || !deferOffscreenRender || interacted || typeof IntersectionObserver === "undefined") return;
-    const observer = new IntersectionObserver(([entry]) => {
+    const observer = new IntersectionObserver((entries) => {
+      const entry = entries[entries.length - 1];
       if (!entry) return;
       if (!entry.isIntersecting) {
         const height = element.getBoundingClientRect().height;
@@ -674,7 +679,6 @@ const ThreadDisplayUnit = memo(function ThreadDisplayUnit({
   const blockMenu = unit.type === "message" && contextBlockKey !== undefined ? (
     <MessageBlockMenu
       mobileActions={mobileActions}
-      messageRoot={elementRef}
       message={unit.message}
       isTurnStreaming={isTurnStreaming}
       contextBlockKey={contextBlockKey}

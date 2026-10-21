@@ -831,7 +831,6 @@ export const ChatList = memo(function ChatList({
                     const tabPartiallySelected = !tabSelected && tabDeleteKeys.some((key) => (
                       selectedDeleteKeys.has(key)
                     ));
-                    const projectMode = group.kind === "project";
 
                     if (isWorkbenchTab) {
                       return (
@@ -992,7 +991,7 @@ export const ChatList = memo(function ChatList({
                             actionMenus.openFromContextMenu(event, actionMenuId)
                           )}
                           className={cn(
-                            "group flex min-w-0 max-w-full items-center gap-1 rounded-control px-2 text-[13px] font-normal leading-5",
+                            "group flex min-w-0 max-w-full items-center gap-1 rounded-control px-2 text-ui",
                             SIDEBAR_SELECTION_ITEM_CLASS,
                             compact ? "min-h-7" : "min-h-8",
                             topicActive
@@ -1042,10 +1041,7 @@ export const ChatList = memo(function ChatList({
                                   partial={tabPartiallySelected}
                                 />
                               ) : null}
-                              <span className={cn(
-                                "relative flex min-w-0 flex-1 items-center overflow-hidden",
-                                projectMode ? "gap-2" : "gap-1.5",
-                              )}>
+                              <span className="relative flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
                                 <SidebarSessionHandle handle={s.handle} />
                                 <span className="min-w-0 flex-1 truncate font-normal leading-5">
                                   {title}
@@ -1451,7 +1447,7 @@ function ActivePaneRows({
                 actionMenus.openFromContextMenu(event, actionMenuId)
               )}
               className={cn(
-                "group/pane flex min-w-0 max-w-full items-center gap-1 rounded-control px-2 text-[13px] font-normal leading-5",
+                "group/pane flex min-w-0 max-w-full items-center gap-1 rounded-control px-2 text-ui",
                 SIDEBAR_SELECTION_ITEM_CLASS,
                 compact ? "min-h-7" : "min-h-8",
                 active
@@ -1674,7 +1670,7 @@ function TemporaryChatSection({
                 data-temporary-chat-row={session.key}
                 data-chat-row={session.key}
                 className={cn(
-                  "group flex min-h-8 min-w-0 max-w-full items-center gap-2 rounded-control px-2 text-[13px] font-normal leading-5",
+                  "group flex min-h-8 min-w-0 max-w-full items-center gap-2 rounded-control px-2 text-ui",
                   SIDEBAR_SELECTION_ITEM_CLASS,
                   active
                     ? "text-sidebar-accent-foreground"
@@ -1884,6 +1880,12 @@ function ChatsFoldFooter({
   );
 }
 
+function synchronizeRunningRing(element: SVGCircleElement | null) {
+  if (!element) return;
+  // Align pending animations before their first frame, not only after animationstart.
+  for (const animation of element.getAnimations()) animation.startTime = 0;
+}
+
 function SessionActivityIndicator({
   state,
 }: {
@@ -1917,7 +1919,18 @@ function SessionActivityIndicator({
           aria-label={label}
           className="grid h-4 w-4 shrink-0 place-items-center"
         >
-          <span className="h-3 w-3 animate-spin rounded-full border border-blue-500/25 border-t-blue-500 [animation-duration:1.4s] motion-reduce:animate-none dark:border-blue-400/25 dark:border-t-blue-400" />
+          <svg
+            className="h-3 w-3 text-sidebar-muted-foreground"
+            viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true"
+          >
+            <circle cx="12" cy="12" r="10" opacity="0.2" />
+            <circle
+              cx="12" cy="12" r="10" strokeDasharray="16 46.8" strokeLinecap="round"
+              className="sidebar-running-ring"
+              ref={synchronizeRunningRing}
+              onAnimationStart={(event) => synchronizeRunningRing(event.currentTarget)}
+            />
+          </svg>
         </span>
       </HoverHint>
     );
