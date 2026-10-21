@@ -14,6 +14,19 @@ from nanobot.cli import dock
 from nanobot.cli._macos_dock import _Clients, _serve, is_local_browser_url
 
 
+@pytest.mark.parametrize("url,root", [
+    ("http://LOCALHOST:8765/#/chat", "http://localhost:8765"),
+    ("http://[0:0:0:0:0:0:0:1]:8765/#/chat", "http://[::1]:8765"),
+    ("http://127.0.0.1:80/#/chat", "http://127.0.0.1"),
+    ("http://localhost:8765/WebUI/?token=private#/chat", "http://localhost:8765/WebUI"),
+])
+def test_window_lookup_matches_browser_origin_normalization(url, root):
+    from nanobot.cli._macos_dock import _browser_root
+
+    assert is_local_browser_url(url)
+    assert _browser_root(url) == root
+
+
 def test_activation_and_reopen_share_one_deferred_focus_request(monkeypatch, tmp_path):
     from types import SimpleNamespace
 
@@ -100,16 +113,28 @@ def test_browser_failure_never_falls_back_to_opening_a_duplicate(monkeypatch, bu
 def test_browser_script_quotes_urls_without_evaluating_them():
     import subprocess
 
-    from nanobot.cli._macos_dock import _applescript_string, _browser_script
+    from nanobot.cli._macos_dock import _applescript_string
 
     url = 'http://localhost:5173/#/quote" & error "injected\\路径'
     result = subprocess.run(["/usr/bin/osascript", "-"], input="return " + _applescript_string(url),
                             capture_output=True, text=True, check=True, timeout=10)
     assert result.stdout.rstrip("\n") == url
-    for browser in ("com.google.Chrome", "com.apple.Safari"):
-        subprocess.run(["/usr/bin/osacompile", "-o", "/dev/null"],
-                       input=_browser_script(browser, url), text=True,
-                       capture_output=True, check=True, timeout=10)
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="native AppleScript parser")
+@pytest.mark.parametrize("browser", ["com.google.Chrome", "com.apple.Safari"])
+def test_browser_script_compiles(browser):
+    import subprocess
+
+    from nanobot.cli._macos_dock import _browser_script
+
+    # Compiling Chrome's terminology requires its optional app dictionary.
+    if browser == "com.google.Chrome" and not any((root / "Google Chrome.app").is_dir()
+                                                   for root in (Path("/Applications"), Path.home() / "Applications")):
+        pytest.skip("Chrome is not installed in a standard Applications directory")
+    subprocess.run(["/usr/bin/osacompile", "-o", "/dev/null"],
+                   input=_browser_script(browser, 'http://localhost:5173/#/quote" & error "injected\\路径'),
+                   text=True, capture_output=True, check=True, timeout=10)
 
 
 @pytest.mark.parametrize("platform", ["linux", "win32"])

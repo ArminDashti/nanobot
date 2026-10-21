@@ -24,6 +24,16 @@ def _applescript_string(value: str) -> str:
     return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
 
 
+def _browser_root(url: str) -> str:
+    """Use the browser's HTTP origin spelling, but keep path case significant."""
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    if ":" in host:
+        host = f"[{ipaddress.IPv6Address(host).compressed}]"
+    authority = host if parts.port == 80 else f"{host}:{parts.port}"
+    return parts._replace(netloc=authority, query="", fragment="").geturl().rstrip("/")
+
+
 def _browser_script(bundle_id: str, url: str) -> str | None:
     """Focus a matching tab without navigating it; errors must not mean absence.
 
@@ -32,9 +42,7 @@ def _browser_script(bundle_id: str, url: str) -> str | None:
     """
     if bundle_id not in {"com.google.Chrome", "com.apple.Safari"}:
         return None
-    parts = urlsplit(url)
-    root = parts._replace(query="", fragment="").geturl().rstrip("/")
-    quoted_root = _applescript_string(root)
+    quoted_root = _applescript_string(_browser_root(url))
     quoted_url = _applescript_string(url)
     if bundle_id == "com.google.Chrome":
         select_tab = "set active tab index of w to tabIndex\nset minimized of w to false"
