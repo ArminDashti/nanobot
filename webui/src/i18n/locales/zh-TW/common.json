@@ -1577,14 +1577,14 @@
       "notSignedIn": "未登入",
       "localCodeHelp": "請在瀏覽器中完成登入。nanobot 通常會自動完成；若未自動完成，請將授權碼貼到下方。",
       "remoteCodeHelp": "請點選 [登入]，在電腦上開啟 xAI。完成登入後，請將 xAI 顯示的授權碼貼到下方。",
-      "localCallbackHelp": "請在瀏覽器中完成登入。nanobot 通常會自動完成；若未自動完成，請複製網址列中的完整 localhost 回呼 URL 並貼到下方。",
-      "remoteCallbackHelp": "請在此瀏覽器中開啟 ChatGPT 並完成登入。當 localhost 頁面無法開啟時，請複製網址列中的完整 URL 並貼到下方。",
+      "localCallbackHelp": "在瀏覽器中完成登入。若 nanobot 未自動連線，請複製 localhost 頁面網址列中的完整連結（即使頁面無法開啟），貼到下方，再點選「完成登入」。",
+      "remoteCallbackHelp": "在此瀏覽器中開啟 ChatGPT 並完成登入。跳轉至 localhost 頁面後，即使頁面無法開啟，也請複製網址列中的完整連結，貼到下方，再點選「完成登入」。",
       "authorizationCode": "授權碼",
       "callbackUrl": "回撥 URL",
-      "callbackUrlPlaceholder": "http://localhost:1455/auth/callback?code=…&state=…",
+      "callbackUrlPlaceholder": "在此貼上完整的回呼連結",
       "openChatGPT": "開啟 ChatGPT",
       "pasteCallbackToContinue": "貼上回呼 URL 以繼續。",
-      "waitingForCallback": "正在等待瀏覽器回呼…",
+      "waitingForCallback": "等待完成登入…",
       "finishSignIn": "完成登入"
     },
     "skills": {

@@ -1577,14 +1577,14 @@
       "notSignedIn": "Belum masuk",
       "localCodeHelp": "Selesaikan proses masuk di browser. nanobot biasanya menyelesaikannya secara otomatis; jika tidak, tempel kode otorisasi di bawah.",
       "remoteCodeHelp": "Pilih Masuk untuk membuka xAI di komputer Anda. Setelah masuk, tempel kode otorisasi yang ditampilkan xAI di bawah.",
-      "localCallbackHelp": "Selesaikan proses masuk di browser. nanobot biasanya menyelesaikannya secara otomatis; jika tidak, salin URL callback localhost lengkap dari bilah alamat dan tempel di bawah.",
-      "remoteCallbackHelp": "Buka ChatGPT di browser ini dan selesaikan proses masuk. Saat halaman localhost gagal dimuat, salin URL lengkap dari bilah alamat dan tempel di bawah.",
+      "localCallbackHelp": "Selesaikan proses masuk di browser. Jika nanobot tidak terhubung otomatis, salin URL lengkap dari bilah alamat halaman localhost, meskipun halaman tidak dapat dimuat, tempel di bawah, lalu pilih “Selesaikan masuk”.",
+      "remoteCallbackHelp": "Buka ChatGPT di browser ini dan selesaikan proses masuk. Setelah diarahkan ke halaman localhost, salin URL lengkap dari bilah alamat, meskipun halaman tidak dapat dimuat, tempel di bawah, lalu pilih “Selesaikan masuk”.",
       "authorizationCode": "Kode otorisasi",
       "callbackUrl": "URL callback",
-      "callbackUrlPlaceholder": "http://localhost:1455/auth/callback?code=…&state=…",
+      "callbackUrlPlaceholder": "Tempel URL callback lengkap di sini",
       "openChatGPT": "Buka ChatGPT",
       "pasteCallbackToContinue": "Tempel URL callback untuk melanjutkan.",
-      "waitingForCallback": "Menunggu callback browser…",
+      "waitingForCallback": "Menunggu proses masuk selesai…",
       "finishSignIn": "Selesaikan masuk"
     },
     "skills": {
