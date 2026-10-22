@@ -138,11 +138,12 @@ jobs:
       # Each update job owns its venv, HOME, profile and lock directory. Preserve
       # the real installation/restore checks, but avoid a loadfile straggler and
       # disk contention with timing-sensitive runtime-registration checks.
+      # Keep three update workers; the six-worker trial exceeded supervisor deadlines.
       - name: Run Windows isolated update jobs
         if: runner.os == 'Windows' && github.event_name != 'push' && needs.changes.outputs.native_required == 'true'
         run: >-
           uv run --no-sync python -m pytest tests/test_update_jobs.py
-          -n 6 --dist load -vv --durations=25 --durations-min=1.0
+          -n 3 --dist load -vv --durations=25 --durations-min=1.0
           --junitxml=test-results/update-jobs.xml --timing-report=test-results/update-jobs.json
 
       - name: Run tests with coverage
@@ -265,12 +266,12 @@ jobs:
           uv tool install pipx==1.17.12
           uv tool dir --bin >> "$GITHUB_PATH"
 
-      # Each case owns an isolated manager/config root. Eight workers double
-      # the prior budget, separately from process-identity checks.
+      # Each case owns an isolated manager/config root. Keep four workers:
+      # eight-way installer startup exceeded the existing command deadlines in CI.
       - name: Run Windows installer checks
         run: >-
           uv run --no-sync python -m pytest tests/test_install_scripts.py
-          -n 8 --dist load -x -vv --durations=10
+          -n 4 --dist load -x -vv --durations=10
           --junitxml=test-results/installers.xml --timing-report=test-results/installers.json
 
       - name: Upload Windows process test timings
