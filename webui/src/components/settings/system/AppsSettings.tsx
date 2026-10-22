@@ -612,8 +612,14 @@ function McpAppsCatalogRow({
   return (
     <article className="min-w-0 rounded-control transition-colors settings-hover">
       <div className="group flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 px-3 py-3">
+        <button
+          type="button"
+          aria-label={preset.display_name}
+          onClick={() => openManagement()}
+          className="flex min-w-0 flex-[1_1_8rem] items-center gap-3 rounded-control text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
         <McpPresetLogo preset={preset} showBrandLogos={showBrandLogos} />
-        <div className="min-w-[8rem] flex-[1_1_8rem]">
+        <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-baseline gap-2">
             <h3 className="truncate text-[14px] font-semibold leading-5 text-foreground">{preset.display_name}</h3>
             {showTypeBadge ? (
@@ -641,6 +647,7 @@ function McpAppsCatalogRow({
             ) : null}
           </p>
         </div>
+        </button>
         <div className="ml-auto flex shrink-0 items-center gap-1">
           {oauthFlow ? (
             <>

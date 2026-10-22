@@ -281,7 +281,7 @@ describe("SettingsView Apps catalog", () => {
     expect(row).not.toBeNull();
     expect(row?.parentElement).toHaveClass("xl:grid-cols-2");
     const failed = within(row as HTMLElement).getByText("Connection failed.");
-    expect(failed.closest("button")).toBeNull();
+    expect(failed.closest("button")).toHaveAccessibleName("Xmind");
     expect(failed.closest("p")?.querySelector(".lucide-triangle-alert")).not.toBeNull();
     expect(row?.querySelector(".lucide-check")).toBeNull();
     expect(within(row as HTMLElement).getByRole("button", { name: "Manage Xmind" })).toHaveTextContent(

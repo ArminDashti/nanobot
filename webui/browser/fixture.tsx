@@ -149,26 +149,36 @@ const unbrandedPlugin: McpPresetInfo = {
 };
 function AppsFixture() {
   const noop = () => {};
+  const managing = parameters.has("manage");
+  const [actions, setActions] = useState<unknown[]>([]);
+  const presets: McpPresetInfo[] = managing ? [{
+    name: "design", display_name: "Design MCP", category: "design", description: "Read design context",
+    docs_url: "", transport: "streamableHttp", auth: "oauth", requires: "", note: "",
+    install_supported: true, installed: false, configured: false, available: true,
+    status: "not_installed", required_fields: [], connection_summary: "https://design.example/mcp", source: "preset",
+  }] : [
+    unbrandedPlugin,
+    { ...unbrandedPlugin, name: "test-mcp", display_name: "Test MCP", source: "builtin", logo_url: "/missing-app-icon.svg" },
+    { ...unbrandedPlugin, name: "brand-example", display_name: "Brand Example", source: "builtin", brand_color: "#5E6AD2" },
+  ];
   return <main className="mx-auto max-w-4xl p-6"><AppsCatalogSettings
     cliApps={{ apps: [], installed_count: 0 }}
-    mcpPresets={{ presets: [
-      unbrandedPlugin,
-      { ...unbrandedPlugin, name: "test-mcp", display_name: "Test MCP", source: "builtin", logo_url: "/missing-app-icon.svg" },
-      { ...unbrandedPlugin, name: "brand-example", display_name: "Brand Example", source: "builtin", brand_color: "#5E6AD2" },
-    ], installed_count: 3 }}
-    cliAppsLoading={false} mcpPresetsLoading={false} query="" filter="ready"
+    mcpPresets={{ presets, installed_count: managing ? 0 : 3 }}
+    cliAppsLoading={false} mcpPresetsLoading={false} query="" filter={managing ? "mcp" : "ready"}
     cliActionKey={null} mcpActionKey={null} mcpOAuthFlow={null} mcpOAuthPopupBlocked={false}
     mcpOAuthCallbackUrl="" mcpOAuthCompleting={false} mcpOAuthCallbackError={null}
     cliMessage={null} cliError={null} cliFocusName={null} mcpMessage={null} mcpError={null}
     mcpFieldValues={{}} customMcpForm={DEFAULT_CUSTOM_MCP_FORM} mcpConfigImport=""
     showBrandLogos={parameters.get("logos") !== "hidden"} requiresRestartPending={false}
-    onQueryChange={noop} onFilterChange={noop} onCliAction={noop} onMcpAction={noop}
-    onMcpOAuthConnect={noop} onMcpOAuthCancel={noop} onMcpOAuthOpen={noop}
+    onQueryChange={noop} onFilterChange={noop} onCliAction={noop}
+    onMcpAction={(action, name, values) => setActions((prev) => [...prev, { action, name, values }])}
+    onMcpOAuthConnect={(name, reset, values) => setActions((prev) => [...prev, { action: "oauth", name, reset, values }])}
+    onMcpOAuthCancel={noop} onMcpOAuthOpen={noop}
     onMcpOAuthCallbackUrlChange={noop} onMcpOAuthComplete={noop} onDismissStatus={noop}
     onBackToChat={noop} onMcpFieldChange={noop} onCustomMcpFormChange={noop}
     onMcpConfigImportChange={noop} onSaveCustomMcp={noop} onImportMcpConfig={noop}
     onMcpToolsChange={noop}
-  /></main>;
+  />{managing && <output data-testid="mcp-actions">{JSON.stringify(actions)}</output>}</main>;
 }
 if (parameters.get("case") === "skeleton-additions") installSkeletonPreviewApi();
 if (parameters.get("case") === "idle-compaction") installIdleCompactionApi();
