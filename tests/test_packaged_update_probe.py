@@ -332,13 +332,22 @@ def parallel_controller(tmp_path, monkeypatch, *, mode="success"):
         write(output / "packaged-update-timings.json", {"schema_version": 1, "clock": "perf_counter",
               "timings": [{"phase": "fixture", "scenario": args.scenario[0], "journey": 1,
                            "seconds": 0.01, "status": "failed" if MODE == "exit" and worker == 1 else "succeeded"}]})
-        if MODE == "timeout":
-            # The descendant owns a real listener. Killing only a Windows venv
-            # redirector/controller would leave this observable resource alive.
+        if MODE == "timeout" or (MODE == "exit-with-child" and worker == 1):
+            # The descendant owns a real listener, even if its controller exits.
             child = "import json, socket, sys, time; from pathlib import Path; " \
                     "s = socket.socket(); s.bind(('127.0.0.1', 0)); s.listen(); " \
-                    "Path(sys.argv[1]).write_text(json.dumps(s.getsockname()[1])); time.sleep(60)"
-            subprocess.Popen([sys.executable, "-I", "-c", child, str(lane / "listener.json")])
+                    "Path(sys.argv[1]).write_text(json.dumps(s.getsockname()[1])); " \
+                    "deadline = time.monotonic() + 60; " \
+                    "exec('while time.monotonic() < deadline and not Path(sys.argv[2]).exists(): time.sleep(0.02)')"
+            subprocess.Popen([sys.executable, "-I", "-c", child,
+                              str(lane / "listener.json"), str(lane / "stop-listener")])
+            if MODE == "exit-with-child":
+                deadline = time.monotonic() + 8
+                while not (lane / "listener.json").exists():
+                    if time.monotonic() > deadline:
+                        raise RuntimeError("Descendant listener did not start")
+                    time.sleep(0.02)
+                raise SystemExit(92)
             time.sleep(60)
         if MODE == "exit" and worker == 1:
             raise SystemExit(91)
@@ -427,6 +436,22 @@ def test_parallel_deadline_kills_owned_controller_trees_and_their_listeners(tmp_
     captured = capsys.readouterr()
     assert "deadline exceeded" in captured.out
     assert "temporary-api-token" not in timings.output.read_text() + captured.out + captured.err
+
+
+def test_exited_controller_cannot_leave_a_descendant_listener_running(tmp_path, monkeypatch):
+    from scripts.verify_installed_release import _wait_for_closed_listeners
+
+    args, root, timings = parallel_controller(tmp_path, monkeypatch, mode="exit-with-child")
+    listener = root / "lane-1/listener.json"
+    try:
+        with pytest.raises(RuntimeError, match="lane failed"):
+            probe.run_parallel(args, root, args.wheel, "0.3.6", digest(args.wheel), list(probe.SCENARIOS), timings)
+        _wait_for_closed_listeners((json.loads(listener.read_text()),))
+    finally:
+        # A red baseline must not leak the process it deliberately exposed.
+        (root / "lane-1/stop-listener").touch()
+        if listener.exists():
+            _wait_for_closed_listeners((json.loads(listener.read_text()),))
 
 
 @pytest.mark.parametrize("mode,message", [("wrong-hash", "original candidate"), ("missing-journey", "every required")])

@@ -29,9 +29,13 @@ import sys
 import time
 from contextlib import ExitStack, closing, contextmanager
 from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 from urllib.parse import quote
 from zipfile import ZIP_DEFLATED, ZipFile
+
+if TYPE_CHECKING:
+    from nanobot.agent.tools._windows_job import WindowsJob
 
 SCENARIOS = ("upgrade", "upgrade-again", "skipped-preview", "import-failure", "restart-failure",
              "backup-failure", "worker-exit", "metadata-loss", "restore-interruption")
@@ -667,13 +671,11 @@ def check_coverage(results: list[dict], scenarios: list[str]) -> None:
             raise ValueError("Lane report does not cover every required upgrade journey")
 
 
-def stop_controller(process: subprocess.Popen) -> None:
-    if os.name == "nt":
-        # A Windows venv interpreter is a redirector. Kill the owned tree, not
-        # just that redirector, including an in-flight updater subprocess.
-        taskkill = Path(os.environ["SYSTEMROOT"]) / "System32/taskkill.exe"
-        subprocess.run([str(taskkill), "/PID", str(process.pid), "/T", "/F"], check=True,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+def stop_controller(process: subprocess.Popen, owner: WindowsJob | None) -> None:
+    # Tree ownership outlives the controller: an exited supervisor can leave an
+    # installer running. Clear that tree before stopping its detached gateways.
+    if owner is not None:
+        owner.terminate()
     else:
         try:
             os.killpg(process.pid, signal.SIGKILL)
@@ -735,11 +737,25 @@ def run_parallel(args, root: Path, target: Path, version: str, original_hash: st
                 # No child stdout/stderr is replayed. It can contain credentials,
                 # including assertion messages and dynamically issued API tokens.
                 log = stack.enter_context((lane / "controller.log").open("w", encoding="utf-8"))
+                owner = None
+                flags = 0
+                if os.name == "nt":
+                    from nanobot.agent.tools._windows_job import WindowsJob
+
+                    owner = stack.enter_context(closing(WindowsJob.create()))
+                    flags = subprocess.CREATE_NEW_PROCESS_GROUP | owner.creation_flags
                 process = subprocess.Popen(command, env=env, cwd=lane, stdout=log, stderr=log,
-                                           start_new_session=os.name != "nt",
-                                           creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0)
-                jobs.append((worker, selected, output, process))
-            for worker, _, _, process in jobs:
+                                           start_new_session=os.name != "nt", creationflags=flags)
+                if owner is not None:
+                    try:
+                        owner.assign_and_resume(process.pid)
+                    except BaseException:
+                        if process.poll() is None:
+                            process.kill()
+                        process.wait(timeout=15)
+                        raise
+                jobs.append((worker, selected, output, process, owner))
+            for worker, _, _, process, _ in jobs:
                 try:
                     status = process.wait(timeout=max(0, deadline - time.monotonic()))
                 except subprocess.TimeoutExpired:
@@ -753,15 +769,14 @@ def run_parallel(args, root: Path, target: Path, version: str, original_hash: st
             cleanup_failed = False
             # Finish or terminate every owned controller before importing JSON.
             # An ordinary failing lane does not interrupt another lane's cleanup.
-            for _, selected, output, process in jobs:
+            for _, selected, output, process, owner in jobs:
                 try:
-                    if process.poll() is None:
-                        stop_controller(process)
+                    stop_controller(process, owner)
                     if process.returncode:
                         cleanup_lane(output, selected)
                 except Exception:
                     cleanup_failed = True
-            for worker, _, output, _ in jobs:
+            for worker, _, output, _, _ in jobs:
                 checkpoint = output / "packaged-update-timings.json"
                 if checkpoint.exists():
                     timings.merge(checkpoint, worker)
@@ -770,7 +785,7 @@ def run_parallel(args, root: Path, target: Path, version: str, original_hash: st
         if failed:
             raise RuntimeError("Packaged update lane failed; raw logs remain private")
         results = {}
-        for _, selected, output, _ in jobs:
+        for _, selected, output, _, _ in jobs:
             report = read(output / "packaged-update-report.json")
             if (report["target_sha256"] != original_hash or report["candidate_commit"] != args.commit
                     or report["version"] != version):
