@@ -24,6 +24,8 @@ print(json.dumps({
     'python': sys.executable,
     'pip': pip.__file__,
     'pip_version': pip.__version__,
+    'creation_command': dict(line.split(' = ', 1) for line in
+                             (Path(sys.prefix) / 'pyvenv.cfg').read_text(encoding='utf-8').splitlines())['command'],
     'versions': {dist.metadata['Name']: dist.version for dist in metadata.distributions()},
     'pip_scripts': [str(distribution.locate_file(path)) for path in distribution.files
                     if Path(distribution.locate_file(path)).name == script],
@@ -102,6 +104,7 @@ def test_seeded_pip_and_installed_scripts_use_independent_prefixes(create_integr
         assert Path(state["python"]).resolve() == python.resolve()
         assert Path(state["pip"]).resolve().is_relative_to(python.parent.parent.resolve())
         assert state["pip_version"] == state["versions"]["pip"] == ensurepip.version()
+        assert " -m venv " in state["creation_command"]
         pip = python.parent / ("pip.exe" if os.name == "nt" else "pip")
         assert [Path(path).resolve() for path in state["pip_scripts"]] == [pip.resolve()]
         assert _run(str(pip), "--version").startswith(f"pip {ensurepip.version()} from {Path(state['pip']).parent}")

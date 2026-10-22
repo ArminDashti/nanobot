@@ -117,11 +117,12 @@ def _use_windows_system_ca_for_default_http_clients() -> Iterator[None]:
 
 @pytest.fixture(scope="session")
 def create_integration_env(tmp_path_factory: pytest.TempPathFactory) -> Callable[[Path], Path]:
-    """Copy an offline seed image into each test's independent Python prefix."""
+    """Seed each stdlib-created prefix from private, offline pip images."""
     import ensurepip
+    import venv
     from importlib.resources import files
 
-    from virtualenv import cli_run
+    from virtualenv import session_via_cli
 
     seed = tmp_path_factory.mktemp("integration-env-seed")
     wheels = seed / "wheels"
@@ -145,6 +146,7 @@ def create_integration_env(tmp_path_factory: pytest.TempPathFactory) -> Callable
     })
     options = [
         "--python", sys.executable,
+        "--creator", "venv",
         "--seeder", "app-data",
         "--copies",
         "--no-download",
@@ -155,9 +157,11 @@ def create_integration_env(tmp_path_factory: pytest.TempPathFactory) -> Callable
     ]
 
     def create(environment: Path) -> Path:
-        # App-data packages are copied, not linked; scripts are regenerated for
-        # this prefix. Tests may overwrite pip without changing later seeds.
-        cli_run([str(environment), *options], setup_logging=False, env=env)
+        # Keep stdlib creation semantics; use virtualenv only for copied seed
+        # packages and prefix-specific launchers, not its runtime import hooks.
+        venv.EnvBuilder(with_pip=False).create(environment)
+        with session_via_cli([str(environment), *options], setup_logging=False, env=env) as session:
+            session.seeder.run(session.creator)
         return environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 
     return create
