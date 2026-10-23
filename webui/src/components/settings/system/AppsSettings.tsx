@@ -211,12 +211,12 @@ export function AppsCatalogSettings({
     })),
   ]
     .filter((item) => {
-      if (normalizedQuery) return appsSearchText(item).includes(normalizedQuery);
-      if (filter === "ready") return appsReady(item);
-      if (filter === "cli") {
-        return item.kind === "cli" || item.preset.source === "agent-plugin";
-      }
-      return item.kind === "mcp" && item.preset.source !== "agent-plugin";
+      const matchesFilter = filter === "ready"
+        ? appsReady(item)
+        : filter === "cli"
+          ? item.kind === "cli" || item.preset.source === "agent-plugin"
+          : item.kind === "mcp" && item.preset.source !== "agent-plugin";
+      return matchesFilter && (!normalizedQuery || appsSearchText(item).includes(normalizedQuery));
     })
     .sort((left, right) => {
       const rank = Number(!appsReady(left)) - Number(!appsReady(right));
@@ -226,7 +226,7 @@ export function AppsCatalogSettings({
     ? (cliApps?.apps ?? []).find((app) => app.name === cliFocusName && app.installed)
     : null;
   const loading = (mcpPresetsLoading && !mcpPresets)
-    || ((filter !== "mcp" || Boolean(normalizedQuery)) && cliAppsLoading && !cliApps);
+    || (filter !== "mcp" && cliAppsLoading && !cliApps);
   const cliAppCount = cliApps?.apps.length ?? 0;
   const emptyTitle = normalizedQuery
     ? tx("settings.apps.empty", "No tools match your search.")
