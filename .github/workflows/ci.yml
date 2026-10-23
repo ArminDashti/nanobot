@@ -1,5 +1,5 @@
 name: Test Suite
-run-name: Windows Settings frozen diagnostic (${{ github.run_number }})
+run-name: Windows Settings targeted file I/O diagnostic (${{ github.run_number }})
 
 on:
   workflow_dispatch:
@@ -536,9 +536,9 @@ jobs:
 
 
   windows_settings_diagnostic:
-    name: Windows Settings frozen diagnostic
+    name: Windows Settings targeted file I/O diagnostic
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
     env:
       PYTEST_ADDOPTS: "-o tmp_path_retention_policy=failed -p scripts.pytest_timing"
     steps:
@@ -549,11 +549,11 @@ jobs:
       - name: Verify frozen diagnostic source
         shell: pwsh
         run: |
-          $base = '284a936ed60f174a581da8920c1a21bd0e34d84e'
+          $base = '65b961745999cce810df0c3059466d933959d4db'
           $parent = git rev-parse HEAD^
           if ($parent -ne $base) { throw "Unexpected diagnostic parent: $parent" }
           git show -s --format='%H %P' HEAD
-          $allowed = @('.github/workflows/ci.yml', 'scripts/settings_ci_diagnostic.py', 'scripts/verify_settings_ci_environment.py', '.diagnostics/settings/base.uv.lock', '.diagnostics/settings/base-packages.json', '.diagnostics/settings/final-packages.json', '.diagnostics/settings/final-constraints.txt')
+          $allowed = @('.github/workflows/ci.yml', 'scripts/settings_ci_diagnostic.py', 'scripts/run_settings_ci_targeted.py', 'scripts/summarize_settings_fileio.py')
           $changed = @(git diff --name-only "$base..HEAD")
           $unexpected = @($changed | Where-Object { $_ -notin $allowed })
           if ($unexpected.Count -gt 0) { throw "Unexpected source changes: $unexpected" }
@@ -600,39 +600,10 @@ jobs:
           uv run --no-sync python scripts/verify_settings_ci_environment.py .diagnostics/settings/final-packages.json test-results/packages.json | Tee-Object -FilePath test-results/final-environment-check.json
           exit $LASTEXITCODE
 
-      - name: Preserve original Windows coordination prelude
+      - name: Observe up to twenty original Settings executions and Kernel-File I/O
         run: >-
-          uv run --no-sync python -m pytest
-          tests/test_installation_lock.py
-          tests/test_update_profiles.py
-          tests/utils/test_helpers.py::test_atomic_record_reader_does_not_block_concurrent_replacement
-          tests/gateway/test_runtime.py::test_runtime_state_publish_keeps_existing_snapshot_readable
-          tests/gateway/test_runtime.py::test_runtime_state_reader_does_not_block_publish_while_decoding
-          -q --junitxml=test-results/coordination.xml --timing-report=test-results/coordination.json
-
-      - name: Preserve original Windows isolated update prelude
-        run: >-
-          uv run --no-sync python -m pytest tests/test_update_jobs.py
-          -n 3 --dist load -vv --durations=25 --durations-min=1.0
-          --junitxml=test-results/update-jobs.xml --timing-report=test-results/update-jobs.json
-
-      - name: Observe original six-worker main workload once
-        run: >-
-          uv run --no-sync python -m pytest
-          -n 6 --dist loadfile
-          --ignore=tests/cli/test_commands.py
-          --ignore=tests/cli/test_cli_input.py
-          --ignore=tests/cli/test_desktop_target.py
-          --ignore=tests/cli/test_desktop_target_entrypoints.py
-          --ignore=tests/tools/test_exec_platform.py
-          --ignore=tests/cli/test_wsl_browser.py
-          --ignore=tests/test_install_scripts.py
-          --ignore=tests/test_update_jobs.py
-          --ignore=tests/test_update_profiles.py
-          -p scripts.settings_ci_diagnostic
-          --settings-diagnostic-dir=test-results/settings-observations
-          --junitxml=test-results/main.xml --timing-report=test-results/main.json
-          --durations=25 --durations-min=1.0
+          uv run --no-sync python -B -m scripts.run_settings_ci_targeted
+          --output test-results/targeted
 
       - name: Record frozen lock digest
         if: always()
@@ -647,7 +618,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: windows-settings-frozen-${{ github.run_id }}
+          name: windows-settings-targeted-io-${{ github.run_id }}
           path: |
             test-results/**/*.json
             test-results/**/*.xml

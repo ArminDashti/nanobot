@@ -58,6 +58,9 @@ class _SettingsProbe:
             "thread_cpu_seconds": time.thread_time(),
             "process_cpu_seconds": time.process_time(),
             "thread": threading.get_ident(),
+            "native_thread": threading.get_native_id(),
+            "pid": os.getpid(),
+            "unix_ns": time.time_ns(),
         })
 
     @pytest.hookimpl(wrapper=True)
@@ -106,6 +109,8 @@ class _SettingsProbe:
             def call(*args, **kwargs):
                 if not getattr(self.active, "enabled", False):
                     return original(*args, **kwargs)
+                if owner is LLMUsageStore and name == "_connect":
+                    self.caches["usage_database"] = str(args[0].path)
                 self.mark(label, "start")
                 try:
                     return original(*args, **kwargs)
