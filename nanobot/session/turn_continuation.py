@@ -24,7 +24,6 @@ if TYPE_CHECKING:
 
 INTERNAL_CONTINUATION_META = "_internal_continuation"
 INTERNAL_CONTINUATION_KIND_META = "_internal_continuation_kind"
-INTERNAL_CONTINUATION_PENDING_META = "_internal_continuation_pending"
 INTERNAL_CONTINUATION_RUN_STARTED_AT_META = "_internal_continuation_run_started_at"
 SKIP_USER_PERSIST_META = "_skip_user_persist"
 
@@ -33,7 +32,6 @@ _GOAL_CONTINUATION_SENDER = "system:continuation"
 _GOAL_CONTINUATION_ROUNDS_KEY = "_sustained_goal_continuation_rounds"
 _MAX_GOAL_CONTINUATION_ROUNDS = 12
 _STRIPPED_INBOUND_META_KEYS = {
-    INTERNAL_CONTINUATION_PENDING_META,
     "goal_requested",
     "original_command",
 }
@@ -51,11 +49,6 @@ def sustained_goal_continuation_inbound(metadata: Mapping[str, Any] | None) -> b
         and metadata
         and metadata.get(INTERNAL_CONTINUATION_KIND_META) == _GOAL_CONTINUATION_KIND
     )
-
-
-def internal_continuation_pending(metadata: Mapping[str, Any] | None) -> bool:
-    """True when the current turn scheduled an invisible continuation slice."""
-    return bool(metadata and metadata.get(INTERNAL_CONTINUATION_PENDING_META) is True)
 
 
 def internal_continuation_run_started_at(metadata: Mapping[str, Any] | None) -> float | None:
@@ -143,7 +136,6 @@ async def maybe_continue_turn(
     _increment_goal_continuation_round(ctx.session.metadata)
 
     logger.info("Turn budget reached; scheduling internal continuation")
-    ctx.msg.metadata[INTERNAL_CONTINUATION_PENDING_META] = True
     ctx.final_content = ""
     ctx.all_messages = messages
     ctx.suppress_response = True
