@@ -372,30 +372,6 @@ describe("ThreadComposer — attachments", () => {
     expect(onSend).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps a plain-text paste untouched without adding a chip", async () => {
-    const onSend = vi.fn();
-    render(<ThreadComposer onSend={onSend} />);
-    const textarea = screen.getByLabelText(/message input/i);
-
-    fireEvent.paste(textarea, {
-      clipboardData: {
-        files: [],
-        items: [
-          {
-            kind: "string",
-            type: "text/plain",
-            getAsFile: () => null,
-          },
-        ],
-        types: ["text/plain"],
-        getData: () => "some pasted text",
-      },
-    });
-
-    expect(screen.queryByTestId("composer-chip")).toBeNull();
-    expect(encodeImage).not.toHaveBeenCalled();
-  });
-
   it("surfaces an inline error when encoding fails", async () => {
     const file = pngFile("bad.png");
     encodeImage.mockResolvedValueOnce({
@@ -548,18 +524,37 @@ describe("local attachment paths and video ingress", () => {
     ]);
   });
 
-  it("keeps failed path text and attachment draft, and does not consume prose or URLs", async () => {
-    const inspect = vi.fn().mockRejectedValue(new Error("file not found"));
+  it.each([
+    [404, "file not found"],
+    [403, "file is outside the current workspace"],
+  ] as const)("retains pasted text on %s, showing only actionable errors", async (status, message) => {
+    const inspect = vi.fn().mockRejectedValue(Object.assign(new Error(message), { status }));
     render(<ThreadComposer onSend={vi.fn()} onInspectAttachment={inspect} />);
     const input = screen.getByLabelText(/message input/i);
     fireEvent.paste(input, { clipboardData: { items: [], getData: () => "./missing.mp4" } });
-    await waitFor(() => expect(screen.getByText("file not found")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("button", { name: /send message/i })).toBeEnabled());
     expect(input).toHaveValue("./missing.mp4");
-    for (const text of ["look at ./missing.mp4 please", "https://host/clip.mp4", "const path = './clip.mp4'", "line one\n./clip.mp4"]) {
-      fireEvent.paste(input, { clipboardData: { items: [], getData: () => text } });
+    if (status === 404) expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    else expect(screen.getByRole("alert")).toHaveTextContent(message);
+    for (const text of ["some pasted text", "look at ./missing.mp4 please", "https://host/clip.mp4", "const path = './clip.mp4'", "line one\n./clip.mp4"]) {
+      fireEvent.paste(input, {
+        clipboardData: {
+          files: [],
+          items: [
+            {
+              kind: "string",
+              type: "text/plain",
+              getAsFile: () => null,
+            },
+          ],
+          types: ["text/plain"],
+          getData: () => text,
+        },
+      });
     }
     expect(inspect).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId("composer-chip")).not.toBeInTheDocument();
+    expect(encodeImage).not.toHaveBeenCalled();
   });
 
   it("does not charge large local documents against a picked document's upload budget", async () => {

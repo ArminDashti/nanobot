@@ -1582,8 +1582,9 @@ export function ThreadComposer({
       setPathInspection((current) => current?.generation === generation ? { ...current, attachment } : current);
     }).catch((error: unknown) => {
       if (generation !== pathCheckGeneration.current || pathCheckScope.current !== scopeIdentity) return;
-      setInlineError(error instanceof Error ? error.message : t("message.attachmentUnavailable"));
       setPathInspection(null);
+      if (error instanceof Error && "status" in error && error.status === 404) return;
+      setInlineError(error instanceof Error ? error.message : t("message.attachmentUnavailable"));
     });
   }, [interactionDisabled, onAttachmentPaste, onInspectAttachment, rawSelection, replaceMentionInput, scopeIdentity, t, value]);
 
