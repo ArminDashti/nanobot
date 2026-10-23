@@ -51,7 +51,6 @@ from nanobot.webui.file_preview import (
 )
 from nanobot.webui.forking import (
     handle_webui_fork_chat,
-    prepare_webui_chat_edit,
     replace_webui_chat_input,
 )
 from nanobot.webui.gateway_services import GatewayServices
@@ -1163,13 +1162,9 @@ class WebUICommandRouter:
         try:
             lock = self.request_locks.setdefault(connection, asyncio.Lock())
             async with lock:
-                if action in {"chat.edit.prepare", "chat.fork"}:
+                if action == "chat.fork":
                     try:
-                        result = (
-                            await prepare_webui_chat_edit(self.gateway, payload)
-                            if action == "chat.edit.prepare"
-                            else await replace_webui_chat_input(self, payload)
-                        )
+                        result = await replace_webui_chat_input(self, payload)
                     except HistoryEditError as exc:
                         return WebUIRequestResult(status=409, message=exc.code)
                     return WebUIRequestResult(result=result)
