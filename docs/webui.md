@@ -4,6 +4,8 @@
 
 The WebUI shares its gateway and saved sessions with the native terminal client and is included with `nanobot-ai`.
 
+Pairing requests, channel status, automations, and usage refresh when they change rather than repeatedly querying unchanged data. Active pages refresh again when you return or reconnect. Remote-connection health checks are shared by the gateway instead of repeated by each browser tab.
+
 For a visual tour, see the [README feature gallery](../README.md#-webui). This guide follows the current source tree; some features are newer than the published release.
 
 ## Open the WebUI
