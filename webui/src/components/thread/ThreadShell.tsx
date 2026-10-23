@@ -212,9 +212,12 @@ function maxFilePreviewWidth(containerWidth: number): number {
   );
 }
 
+const EMPTY_TITLE_OVERRIDES: Record<string, string> = {};
+
 interface ThreadShellProps {
   session: ChatSummary | null;
   sessions?: ChatSummary[];
+  titleOverrides?: Record<string, string>;
   title: string;
   temporary?: boolean;
   temporaryChatIds?: readonly string[];
@@ -440,6 +443,7 @@ function useInstalledSettingItems<Payload, Item>({
 export function ThreadShell({
   session,
   sessions = [],
+  titleOverrides = EMPTY_TITLE_OVERRIDES,
   title,
   temporary = false,
   temporaryChatIds = [],
@@ -486,8 +490,11 @@ export function ThreadShell({
   const historyKey = temporary ? null : session?.key ?? null;
   const previewSessionKey = session?.key ?? null;
   const mentionSessions = useMemo(
-    () => sessions.filter((candidate) => candidate.key !== historyKey),
-    [historyKey, sessions],
+    () => sessions.filter((candidate) => candidate.key !== historyKey).map((candidate) => {
+      const renamedTitle = titleOverrides[candidate.key]?.trim();
+      return renamedTitle ? { ...candidate, title: renamedTitle } : candidate;
+    }),
+    [historyKey, sessions, titleOverrides],
   );
   const { client, getToken, ingressLimits, modelName, token, webuiCapabilities } = useClient();
   const favoriteWorkspaceProject = useCallback(
