@@ -82,7 +82,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
-  WorkspaceAccessToggle,
+  WorkspaceAccessMenu,
   WorkspaceProjectPicker,
 } from "@/components/thread/WorkspaceControls";
 import {
@@ -257,6 +257,7 @@ interface ThreadComposerProps {
   workspaceDefaultScope?: WorkspaceScopePayload | null;
   workspaceControls?: WorkspacesPayload["controls"] | null;
   workspaceScopeDisabled?: boolean;
+  workspaceProjectLocked?: boolean;
   workspaceError?: string | null;
   onFavoriteWorkspaceProject?: (path: string, pinned: boolean) => Promise<ProjectDirectory[]>;
   onResolveWorkspaceProject?: (path: string) => Promise<ProjectDirectory>;
@@ -1114,6 +1115,7 @@ export function ThreadComposer({
   workspaceDefaultScope = null,
   workspaceControls = null,
   workspaceScopeDisabled = false,
+  workspaceProjectLocked = false,
   workspaceError = null,
   onLoadWorkspaceProjects,
   onResolveWorkspaceProject,
@@ -1174,6 +1176,7 @@ export function ThreadComposer({
   // Coarser than hasTouchPrimaryPointer on purpose: tablets with a physical
   // keyboard still get the newline-on-Enter behavior.
   const hasCoarsePointer = useMediaQuery("(pointer: coarse)");
+  const mobileWorkspaceControls = useMediaQuery("(max-width: 639px)");
   const { readingTextSize } = useLocalPreferences();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const mentionOverlayRef = useRef<HTMLDivElement>(null);
@@ -1213,7 +1216,7 @@ export function ThreadComposer({
   const isHero = variant === "hero";
   const voiceShortcutLabel = useMemo(getVoiceShortcutLabel, []);
   const projectPickerAvailable =
-    isHero
+    !workspaceProjectLocked
     && !!workspaceDefaultScope
     && !!onWorkspaceScopeChange
     && !!onLoadWorkspaceProjects
@@ -1236,9 +1239,7 @@ export function ThreadComposer({
     ));
   }, [activeTurnId, isStreaming, pendingQueueKey, setQueuedPrompt]);
 
-  const resolvedPlaceholder = isStreaming
-    ? t("thread.composer.placeholderStreaming")
-    : placeholder ?? t("thread.composer.placeholderThread");
+  const resolvedPlaceholder = placeholder ?? t("thread.composer.placeholderThread");
 
   const maxAttachments = ingressLimits?.attachments.max_count
     ?? MAX_ATTACHMENTS_PER_MESSAGE;
@@ -2526,17 +2527,15 @@ export function ThreadComposer({
     return () => observer?.disconnect();
   }, [compactControls, compactWhenIdle, modelLabel, voiceRecorder.isRecording, workspaceScope]);
   const accessControl = workspaceScope && !workspaceControlsHidden ? (
-    <WorkspaceAccessToggle
+    <WorkspaceAccessMenu
       scope={workspaceScope}
       disabled={interactionDisabled || workspaceScopeDisabled}
-      isHero={isHero}
       onChange={onWorkspaceScopeChange}
     />
   ) : null;
   const workspaceControl = showProjectPicker ? (
     <WorkspaceProjectPicker
       layoutAnchor={workspacePickerLayoutAnchor}
-      isHero={isHero}
       disabled={interactionDisabled || workspaceScopeDisabled}
       scope={workspaceScope}
       defaultScope={workspaceDefaultScope}
@@ -2566,7 +2565,7 @@ export function ThreadComposer({
       onClick={modelNeedsSetup ? onModelBadgeClick : undefined}
     />
   ) : null;
-  const usageControl = !voiceRecorder.isRecording ? (
+  const usageControl = !voiceRecorder.isRecording && (contextUsage || recentRoundUsage.length) ? (
     <ComposerUsagePopover context={contextUsage} rounds={recentRoundUsage} showLabel={compactControls} bottomSheet={compactControls} />
   ) : null;
   const inputTextClasses = cn(
@@ -2626,8 +2625,10 @@ export function ThreadComposer({
         if (!handleSessionDrop(event)) onDrop(event);
       }}
       className={cn(
-        "relative w-full",
-        isHero ? "px-0" : "px-1 pb-1.5 pt-1 sm:px-0",
+        "thread-composer-form relative w-full [--composer-action-margin:0px]",
+        isHero
+          ? "px-0 [--composer-action-size:2rem] [--composer-footer-inset:0.75rem] sm:[--composer-footer-inset:1rem]"
+          : "px-1 pb-1.5 pt-1 [--composer-action-size:2.25rem] [--composer-footer-inset:0.625rem] sm:px-0 sm:[--composer-footer-inset:0.75rem]",
         compactWhenIdle && "thread-composer-collapsible-layout",
         paletteBeside && "grid grid-cols-2 items-start gap-2 p-0",
       )}
@@ -2800,13 +2801,13 @@ export function ThreadComposer({
         ) : null}
         <div
           className={cn(
-            "thread-composer-footer flex flex-nowrap items-center motion-safe:transition-[padding-bottom] motion-safe:[transition-duration:220ms] motion-safe:ease-in-out",
+            "thread-composer-footer flex flex-nowrap items-center px-[var(--composer-footer-inset)] motion-safe:transition-[padding-bottom] motion-safe:[transition-duration:220ms] motion-safe:ease-in-out",
             isHero
               ? cn(
-                  "gap-x-1.5 px-3 sm:px-4",
+                  "gap-x-1.5",
                   showProjectPicker && compactControls ? "pb-1.5" : "pb-3.5",
                 )
-              : "gap-x-2 px-2.5 pb-2 sm:px-3",
+              : "gap-x-2 pb-2",
           )}
         >
           <div
@@ -2832,13 +2833,12 @@ export function ThreadComposer({
               onClick={() => fileInputRef.current?.click()}
               className={cn(
                 "thread-composer-action thread-composer-round-action touch-target shrink-0 rounded-xl text-muted-foreground hover:text-foreground",
-                isHero
-                  ? "h-8 w-8"
-                  : "h-9 w-9",
+                "h-[var(--composer-action-size)] w-[var(--composer-action-size)]",
               )}
             >
               <AttachIcon className="h-3.5 w-3.5" />
             </Button>
+            {!mobileWorkspaceControls ? accessControl : null}
             {voiceRecorder.isRecording ? (
               <VoiceRecordingMeter
                 ariaLabel={voiceRecordingStatusLabel}
@@ -2847,12 +2847,7 @@ export function ThreadComposer({
                 isHero={isHero}
                 levels={voiceRecorder.levels}
               />
-            ) : compactControls ? modelControl : (
-              <div className="thread-composer-workspace-group flex min-w-0 items-center gap-0.5">
-                {workspaceControl}
-                {accessControl}
-              </div>
-            )}
+            ) : null}
           </div>
           <div
             className={cn(
@@ -2860,7 +2855,7 @@ export function ThreadComposer({
               isHero ? "gap-1.5" : "gap-2",
             )}
           >
-            {!compactControls ? modelControl : null}
+            {modelControl}
             {!compactControls ? usageControl : null}
             <TooltipProvider>
               <Tooltip>
@@ -2934,26 +2929,19 @@ export function ThreadComposer({
             </TooltipProvider>
           </div>
         </div>
-        {compactControls && projectPickerAvailable ? (
-          <div
-            className="inline-disclosure"
-            data-composer-workspace-drawer=""
-            data-state={showProjectPicker ? "open" : "closed"}
-            aria-hidden={showProjectPicker ? undefined : true}
-          >
-            <div className="inline-disclosure-clip">
-              <div className="inline-disclosure-content thread-composer-workspace-row flex min-w-0 items-center justify-between gap-2 rounded-b-[28px] bg-muted/45 px-3 py-1.5 dark:bg-white/[0.045] sm:px-4">
-                {workspaceControl}
-                <div className="ml-auto flex min-w-0 justify-end">{accessControl}</div>
-              </div>
-            </div>
-          </div>
-        ) : null}
       </div>
-      {compactControls && (!projectPickerAvailable || usageControl) ? (
-        <div className="thread-composer-meta mx-auto flex w-full max-w-[58rem] items-center justify-between gap-2 px-3">
-          {!projectPickerAvailable ? accessControl : null}
-          <div className="ml-auto">{usageControl}</div>
+      {workspaceControl || mobileWorkspaceControls && accessControl || compactControls && usageControl ? (
+        <div className={cn(
+          "thread-composer-meta mx-auto mt-1 flex w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-1 pr-2 sm:pr-3",
+          isHero ? "max-w-[58rem]" : "max-w-[49.5rem]",
+          paletteBeside && "col-start-1 row-start-2",
+        )}>
+          {mobileWorkspaceControls && compactControls && usageControl ? <div className="flex w-full justify-end">{usageControl}</div> : null}
+          <div className={cn("thread-composer-workspace-group flex min-w-0 items-center gap-1", mobileWorkspaceControls ? "flex-1" : "flex-auto max-[359px]:flex-wrap")}>
+            {workspaceControl}
+          </div>
+          {!mobileWorkspaceControls && compactControls && usageControl ? <div className="ml-auto shrink-0">{usageControl}</div> : null}
+          {mobileWorkspaceControls && accessControl ? <div className="ml-auto min-w-0 max-w-[55%] shrink">{accessControl}</div> : null}
         </div>
       ) : null}
     </form>
