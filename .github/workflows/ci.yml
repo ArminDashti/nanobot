@@ -438,6 +438,15 @@ jobs:
         working-directory: tui
         run: bun run build
 
+      - name: Retain compiled TUI size evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tui-size-${{ runner.os }}
+          path: tui/dist/*.size.json
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Verify licensed Linux release archive
         if: runner.os == 'Linux'
         working-directory: tui
