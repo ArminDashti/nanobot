@@ -8,7 +8,7 @@ Corresponding upstream source:
 - Bun 1.3.13 (`bf2e2cecf27e800962b1e7f03d66278f9d5d2e79`): <https://github.com/oven-sh/bun/tree/bun-v1.3.13>
 - Bun's patched WebKit (`4d5e75ebd84a14edbc7ae264245dcd77fe597c10`): <https://github.com/oven-sh/WebKit/tree/4d5e75ebd84a14edbc7ae264245dcd77fe597c10>
 - OpenTUI 0.5.11: <https://www.npmjs.com/package/@opentui/core/v/0.5.11> (source: <https://github.com/anomalyco/opentui/tree/6b9863ea7c5fae22bfebb23c242ddcc4c2b0aa0e>)
-- Pele 1.6.0: <https://www.npmjs.com/package/pele/v/1.6.0>
+- Pele 1.9.0: <https://www.npmjs.com/package/pele/v/1.9.0>
 - resvg-js 2.6.2 (MPL-2.0): <https://github.com/yisibl/resvg-js/tree/v2.6.2>. The public `index.js` wrapper and native bindings are unmodified; `tui/scripts/target-bindings.ts` supplies the build-target-specific internal loader and is included in `nanobot-tui-source.tar.gz`. The upstream license text is reproduced in the notices.
 - fontkit 2.0.4: <https://www.npmjs.com/package/fontkit/v/2.0.4>; fontkit, dfa 1.2.0, and brotli 1.3.3 declare MIT in their upstream README files, which are reproduced in the notices because these npm releases have no standalone license file. Exact dependency versions and tarball integrity are pinned in `bun.lock`.
 
