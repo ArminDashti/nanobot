@@ -2156,6 +2156,7 @@
     "imageAttachment": "이미지 첨부",
     "videoAttachment": "동영상 첨부",
     "fileAttachment": "파일 첨부",
+    "downloadAttachment": "{{name}} 다운로드",
     "attachmentUnavailable": "첨부 파일을 사용할 수 없음",
     "dataTable": "데이터 표",
     "fileEditPreparing": "파일 편집 준비 중…",

@@ -2157,6 +2157,7 @@
     "imageAttachment": "Imagen adjunta",
     "videoAttachment": "Archivo de vídeo",
     "fileAttachment": "Archivo adjunto",
+    "downloadAttachment": "Descargar {{name}}",
     "attachmentUnavailable": "Adjunto no disponible",
     "dataTable": "Tabla de datos",
     "fileEditPreparing": "Preparando la edición del archivo…",

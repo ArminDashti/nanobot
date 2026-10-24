@@ -2539,6 +2539,7 @@
     "imageAttachment": "图片附件",
     "videoAttachment": "视频附件",
     "fileAttachment": "文件附件",
+    "downloadAttachment": "下载 {{name}}",
     "attachmentUnavailable": "附件不可用",
     "dataTable": "数据表",
     "fileEditPreparing": "准备编辑文件…",

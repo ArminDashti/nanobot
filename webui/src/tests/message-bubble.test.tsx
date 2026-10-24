@@ -1268,7 +1268,7 @@ describe("MessageBubble", () => {
 
     const { container } = render(<MessageBubble message={message} />);
 
-    expect(screen.getByLabelText("File attachment")).toHaveTextContent("index.html");
+    expect(screen.getByRole("link", { name: "Download index.html" })).toHaveTextContent("index.html");
     expect(container.querySelector("img")).not.toBeInTheDocument();
   });
 
@@ -1291,7 +1291,7 @@ describe("MessageBubble", () => {
 
     expect(screen.getByRole("button", { name: /view image: growth.svg/i })).toBeInTheDocument();
     expect(container.querySelector('img[src="/api/media/sig/svg"]')).toBeInTheDocument();
-    expect(screen.queryByLabelText("File attachment")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Download growth.svg" })).not.toBeInTheDocument();
   });
 
 });

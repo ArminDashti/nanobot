@@ -651,32 +651,42 @@ function MessageMedia({
   if (media.length === 0) return null;
   const images: UIImage[] = [];
   const seen = new Set<string>();
-  const nonImages: UIMediaAttachment[] = [];
+  const videos: UIMediaAttachment[] = [];
+  const files: UIMediaAttachment[] = [];
   for (const item of media) {
     const normalized = toMediaAttachment(item);
     if (normalized.kind === "image") {
       if (normalized.url && (inlineImages.has(normalized.url) || seen.has(normalized.url))) continue;
       if (normalized.url) seen.add(normalized.url);
       images.push({ url: normalized.url, name: normalized.name });
+    } else if (normalized.kind === "video") {
+      videos.push(normalized);
     } else {
-      nonImages.push(normalized);
+      files.push(normalized);
     }
   }
-  if (images.length === 0 && nonImages.length === 0) return null;
+  if (images.length === 0 && videos.length === 0 && files.length === 0) return null;
 
   return (
     <div
       className={cn(
-        "mt-2 flex flex-wrap gap-2",
-        align === "right" ? "justify-end" : "justify-start",
+        "mt-2 flex min-w-0 max-w-full flex-col gap-2",
+        align === "right" ? "items-end" : "items-start",
       )}
     >
       {images.length > 0 ? (
         <ImageGallery images={images} align={align} size={align === "left" ? "large" : "compact"} />
       ) : null}
-      {nonImages.map((item, i) => (
-        <AttachmentTile key={`${item.kind}-${i}`} attachment={item} pending={pending} />
+      {videos.map((item, i) => (
+        <AttachmentTile key={`video-${i}`} attachment={item} pending={pending} className="my-0" />
       ))}
+      {files.length > 0 ? (
+        <div className={cn("flex w-full min-w-0 flex-wrap items-start gap-2", align === "right" && "justify-end")}>
+          {files.map((item, i) => (
+            <AttachmentTile key={`file-${i}`} attachment={item} pending={pending} />
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

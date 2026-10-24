@@ -2156,6 +2156,7 @@
     "imageAttachment": "Tệp hình ảnh đính kèm",
     "videoAttachment": "Tệp video đính kèm",
     "fileAttachment": "Tệp đính kèm",
+    "downloadAttachment": "Tải xuống {{name}}",
     "attachmentUnavailable": "Tệp đính kèm không khả dụng",
     "dataTable": "Bảng dữ liệu",
     "fileEditPreparing": "Đang chuẩn bị sửa tệp…",

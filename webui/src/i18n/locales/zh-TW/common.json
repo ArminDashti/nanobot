@@ -2156,6 +2156,7 @@
     "imageAttachment": "圖片附件",
     "videoAttachment": "影片附件",
     "fileAttachment": "檔案附件",
+    "downloadAttachment": "下載 {{name}}",
     "attachmentUnavailable": "附件無法使用",
     "dataTable": "資料表",
     "fileEditPreparing": "準備編輯檔案…",

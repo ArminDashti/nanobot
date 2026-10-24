@@ -37,6 +37,7 @@ import { WorkspaceAlignmentFixture } from "./workspace-alignment-fixture";
 import { ComposerActionFixture } from "./composer-action-fixture";
 import { MobileChatLayoutFixture } from "./mobile-chat-layout-fixture";
 import { DisplayMathFixture } from "./display-math-fixture";
+import { AttachmentLayoutFixture } from "./attachment-layout-fixture";
 
 const history: UIMessage[] = [
   { id: "question", role: "user", content: "Earlier question", createdAt: 1_700_000_000_000 },
@@ -210,7 +211,9 @@ if (parameters.get("case") === "skeleton-additions") installSkeletonPreviewApi()
 if (parameters.get("case") === "idle-compaction") installIdleCompactionApi();
 await initializeI18n();
 createRoot(document.getElementById("root")!).render(<TooltipProvider>
-  {parameters.get("case") === "mobile-chat-layout"
+  {parameters.get("case") === "attachments"
+    ? <AttachmentLayoutFixture />
+    : parameters.get("case") === "mobile-chat-layout"
     ? <ClientProvider client={railClient} token="fixture"><MobileChatLayoutFixture parameters={parameters} /></ClientProvider>
     : parameters.get("case") === "composer-action"
     ? <ComposerActionFixture parameters={parameters} />
