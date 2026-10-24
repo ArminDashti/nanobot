@@ -903,7 +903,8 @@ export const ThreadViewport = forwardRef<ThreadViewportHandle, ThreadViewportPro
       if (el.scrollTop > 1) historySpringRef.current?.leaveBoundary();
       const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
       const near = distance < NEAR_BOTTOM_PX;
-      const owner = threadMotionRef.current?.observeScroll(near) ?? "automatic";
+      // A detached history page's bottom is not the live tail.
+      const owner = threadMotionRef.current?.observeScroll(near && !historyWindow) ?? "automatic";
       const logicallyAtBottom = !historyWindow && (owner === "automatic" || (owner === "navigation" && near));
       setAtBottom((current) =>
         current === logicallyAtBottom ? current : logicallyAtBottom,
@@ -942,7 +943,7 @@ export const ThreadViewport = forwardRef<ThreadViewportHandle, ThreadViewportPro
       }
       threadMotionRef.current?.handleUserScrollIntent(
         canScrollInDirection(el, direction),
-        direction === "forward",
+        direction === "forward" && !historyWindow,
       );
     };
     const prepareHistoryPull = () => {
@@ -1026,11 +1027,7 @@ export const ThreadViewport = forwardRef<ThreadViewportHandle, ThreadViewportPro
         setAtHistoryTop(true);
         return;
       }
-      // Locally windowed messages need no network gesture or loading feedback.
-      if (hiddenMessageCount > 0) handleDirectionalInput(directionFromDelta(delta));
-      else threadMotionRef.current?.handleUserScrollIntent(
-        canScrollInDirection(el, directionFromDelta(delta)), delta > 0,
-      );
+      handleDirectionalInput(directionFromDelta(delta));
     };
     const handleTouchEnd = () => {
       const pulling = historyTouchRef.current?.pulling;
