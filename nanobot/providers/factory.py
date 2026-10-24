@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from nanobot.config.schema import (
@@ -310,6 +311,20 @@ def build_provider_snapshot(
         generation=resolved.to_generation_settings(),
         model_preset=selected_preset,
     )
+
+
+def build_isolated_provider_snapshot(
+    config: Config, *, preset: ModelPresetConfig,
+) -> ProviderSnapshot:
+    """Capture SDK override inputs, including credentials used by lazy fallback clients."""
+    owned = config.model_copy(deep=True)
+    resolved = preset.model_copy(deep=True)
+    chain = [resolved, *_resolve_fallback_presets(owned, resolved)]
+    if any((provider := owned.get_provider(preset=item)) and provider.use_proxy for item in chain):
+        owned.network.proxy = owned.network.resolve_proxy(True)
+    snapshot = build_provider_snapshot(owned, preset=resolved)
+    # Runtime metadata must not alias the inputs captured by the fallback factory.
+    return replace(snapshot, signature=deepcopy(snapshot.signature))
 
 
 def load_provider_snapshot(
