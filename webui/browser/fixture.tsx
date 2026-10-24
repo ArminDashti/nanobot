@@ -36,6 +36,7 @@ import { QueuedGuidanceFixture } from "./queued-guidance-fixture";
 import { WorkspaceAlignmentFixture } from "./workspace-alignment-fixture";
 import { ComposerActionFixture } from "./composer-action-fixture";
 import { MobileChatLayoutFixture } from "./mobile-chat-layout-fixture";
+import { DisplayMathFixture } from "./display-math-fixture";
 
 const history: UIMessage[] = [
   { id: "question", role: "user", content: "Earlier question", createdAt: 1_700_000_000_000 },
@@ -203,6 +204,8 @@ createRoot(document.getElementById("root")!).render(<TooltipProvider>
     ? <SidebarActivityFixture />
     : parameters.get("case") === "chat-failure"
     ? <ChatFailureFixture parameters={parameters} />
+    : parameters.get("case") === "display-math"
+    ? <DisplayMathFixture />
     : parameters.get("case") === "markdown-emphasis"
     ? <MarkdownEmphasisFixture />
     : parameters.get("case") === "typography"
