@@ -266,3 +266,26 @@ async def test_same_effective_signature_still_validates_preset_input(configured_
     assert resolve(config, resolver, "openai_codex/override").provider is first.provider
     assert len(created) == 2
     await resolver.aclose()
+
+
+@pytest.mark.asyncio
+async def test_equivalent_invalid_fallback_is_not_hidden_by_reuse(configured_override):
+    config, resolver, created = configured_override
+    config.agents.defaults.fallback_models = ["backup"]
+    fallback = config.model_presets["backup"]
+    fallback.provider = "openai_codex"
+    fallback.model = "openai_codex/backup"
+    config.providers.openai_codex.extra_headers = {"X-Route": "fixture"}
+    error = LLMResponse(content="temporarily unavailable", finish_reason="error", error_kind="server_error")
+    first = resolve(config, resolver)
+    first.provider._primary.chat = AsyncMock(return_value=error)
+    assert (await first.provider.chat(messages=[], model=first.model)).content == "ok"
+
+    fallback.extra_headers = {"X-Route": "fixture"}
+    second = resolve(config, resolver)  # Invalid fallback setup must remain lazy.
+    second.provider._primary.chat = AsyncMock(return_value=error)
+    result = await second.provider.chat(messages=[], model=second.model)
+    assert result.finish_reason == "error"
+    assert second.provider is not first.provider
+    await resolver.aclose()
+    assert all(provider.aclose.await_count == 1 for provider in created)

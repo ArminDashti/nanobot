@@ -17,6 +17,7 @@ from nanobot.providers.factory import (
     ProviderSnapshot,
     build_isolated_provider_snapshot,
     build_provider_snapshot,
+    provider_override_declarations,
     provider_signature,
     validate_provider_setup,
 )
@@ -317,7 +318,8 @@ class ModelRuntimeResolver:
             preset, previous_provider=config.get_provider_name(preset=base),
             provider=config.get_provider_name(preset=preset),
         )
-        key = _override_key(provider_signature(config, preset=preset))
+        declarations = provider_override_declarations(config, preset=preset)
+        key = _override_key((provider_signature(config, preset=preset), declarations))
         if key is None:
             return self.resolve_snapshot(build_provider_snapshot(config, preset=preset))
         if self._recent_override is not None and self._recent_override.key == key:
@@ -327,7 +329,7 @@ class ModelRuntimeResolver:
 
         snapshot = build_isolated_provider_snapshot(config, preset=preset)
         runtime = self.resolve_snapshot(snapshot)
-        key = _override_key(snapshot.signature)
+        key = _override_key((snapshot.signature, declarations))
         if key is None:
             return runtime
         # Replacing lookup eligibility must not close providers still used by active turns.

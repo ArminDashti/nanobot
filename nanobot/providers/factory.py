@@ -11,6 +11,7 @@ from nanobot.config.schema import (
     InlineFallbackConfig,
     ModelPresetConfig,
     ProviderConfig,
+    RequestOverrides,
 )
 from nanobot.providers.base import GenerationSettings, LLMProvider
 from nanobot.providers.fallback_provider import FallbackProvider
@@ -310,6 +311,16 @@ def build_provider_snapshot(
         signature=provider_signature(config, preset=resolved),
         generation=resolved.to_generation_settings(),
         model_preset=selected_preset,
+    )
+
+
+def provider_override_declarations(
+    config: Config, *, preset: ModelPresetConfig,
+) -> tuple[tuple[bool, ...], ...]:
+    """Distinguish input restrictions hidden by merged wire settings, including lazy fallbacks."""
+    return tuple(
+        tuple(bool(getattr(item, field)) for field in RequestOverrides.model_fields)
+        for item in [preset, *_resolve_fallback_presets(config, preset)]
     )
 
 
