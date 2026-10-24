@@ -1668,3 +1668,11 @@
 .code-content .token.italic {
   font-style: italic;
 }
+
+html[lang="fa"] {
+  font-family: Vazir, Tahoma, "Segoe UI", Arial, sans-serif;
+}
+
+html[lang="fa"] .font-sans {
+  font-family: inherit;
+}

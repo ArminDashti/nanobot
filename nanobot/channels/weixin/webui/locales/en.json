@@ -12,20 +12,48 @@
         "label": "Token",
         "placeholder": "Saved by QR login"
       },
-      "sendProgress": { "label": "Send progress" },
-      "sendToolHints": { "label": "Tool hints" },
-      "streaming": { "label": "Use streaming API" },
-      "replyProgressMessages": { "label": "Detailed progress" },
-      "replyProgressMaxMessages": { "label": "Progress message limit" },
-      "contextMessageBudget": { "label": "Context message limit" },
-      "blockStreaming": { "label": "Reply in blocks" },
-      "blockStreamingMinChars": { "label": "Minimum block length (characters)" },
-      "blockStreamingMaxMessages": { "label": "Block count limit" },
-      "baseUrl": { "label": "API URL" },
-      "cdnBaseUrl": { "label": "CDN URL" },
-      "routeTag": { "label": "Route tag" },
-      "stateDir": { "label": "State directory" },
-      "pollTimeout": { "label": "Poll timeout (seconds)" }
+      "sendProgress": {
+        "label": "Send progress"
+      },
+      "sendToolHints": {
+        "label": "Tool hints"
+      },
+      "streaming": {
+        "label": "Use streaming API"
+      },
+      "replyProgressMessages": {
+        "label": "Detailed progress"
+      },
+      "replyProgressMaxMessages": {
+        "label": "Progress message limit"
+      },
+      "contextMessageBudget": {
+        "label": "Context message limit"
+      },
+      "blockStreaming": {
+        "label": "Reply in blocks"
+      },
+      "blockStreamingMinChars": {
+        "label": "Minimum block length (characters)"
+      },
+      "blockStreamingMaxMessages": {
+        "label": "Block count limit"
+      },
+      "baseUrl": {
+        "label": "API URL"
+      },
+      "cdnBaseUrl": {
+        "label": "CDN URL"
+      },
+      "routeTag": {
+        "label": "Route tag"
+      },
+      "stateDir": {
+        "label": "State directory"
+      },
+      "pollTimeout": {
+        "label": "Poll timeout (seconds)"
+      }
     }
   },
   "custom": {

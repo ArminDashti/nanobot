@@ -559,6 +559,17 @@ const HERO_GREETING_KEYS = [
   "thread.empty.greetings.tackle",
 ] as const;
 
+const HERO_GREETING_WELCOME_KEYS = [
+  "thread.empty.greetings.welcome",
+  "thread.empty.greetings.welcomeBuild",
+  "thread.empty.greetings.welcomeWork",
+  "thread.empty.greetings.welcomeStart",
+] as const;
+
+type HeroGreetingKey =
+  | (typeof HERO_GREETING_KEYS)[number]
+  | (typeof HERO_GREETING_WELCOME_KEYS)[number];
+
 function HeroGreeting({ text }: { text: string }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -629,9 +640,14 @@ function HeroGreeting({ text }: { text: string }) {
   );
 }
 
-function randomHeroGreetingKey(): (typeof HERO_GREETING_KEYS)[number] {
-  const index = Math.floor(Math.random() * HERO_GREETING_KEYS.length);
-  return HERO_GREETING_KEYS[index] ?? HERO_GREETING_KEYS[0];
+function randomHeroGreetingKey(named: boolean): HeroGreetingKey {
+  const pool = named ? HERO_GREETING_WELCOME_KEYS : HERO_GREETING_KEYS;
+  const index = Math.floor(Math.random() * pool.length);
+  return pool[index] ?? pool[0];
+}
+
+function isNamedHeroGreetingKey(key: HeroGreetingKey): boolean {
+  return (HERO_GREETING_WELCOME_KEYS as readonly string[]).includes(key);
 }
 
 interface PendingFirstMessage {
@@ -796,7 +812,7 @@ export function ThreadShell({
     version: historyVersion,
     forkBoundaryMessageCount,
   } = useSessionHistory(historyKey);
-  const { client, getToken, ingressLimits, modelName, token, webuiCapabilities } = useClient();
+  const { client, getToken, ingressLimits, modelName, token, webuiCapabilities, yodaFirstName, yodaOperator } = useClient();
   const favoriteWorkspaceProject = useCallback(
     async (path: string, pinned: boolean) => {
       const response = await client.requestMutation<{ favorite_projects: ProjectDirectory[] }>("workspace.favorite", { path, pinned });
@@ -841,7 +857,9 @@ export function ThreadShell({
     reauthProvider?: string;
     dismissed: boolean;
   } | null>(null);
-  const [heroGreetingKey, setHeroGreetingKey] = useState(randomHeroGreetingKey);
+  const [heroGreetingKey, setHeroGreetingKey] = useState<HeroGreetingKey>(() =>
+    randomHeroGreetingKey(false),
+  );
   const [submittedViewportTurnId, setSubmittedViewportTurnId] = useState<string | null>(null);
   const { state: previewState, openFile, openWeb, selectTab, closeTab, close: closePreview, setWidth: setFilePreviewWidth } =
     useFilePreviewState(previewSessionKey, filePreviewStore);
@@ -1204,9 +1222,15 @@ export function ThreadShell({
   const modelBadgeLabel = modelBadge.needsSetup
     ? t("thread.composer.chooseAI", { defaultValue: "Choose your AI" })
     : modelBadge.label;
+  const heroGreetingText = useMemo(() => {
+    if (yodaFirstName && isNamedHeroGreetingKey(heroGreetingKey)) {
+      return t(heroGreetingKey, { name: yodaFirstName });
+    }
+    return t(heroGreetingKey);
+  }, [heroGreetingKey, t, yodaFirstName]);
   useEffect(() => {
     if (showHeroComposer && !wasShowingHeroComposerRef.current) {
-      setHeroGreetingKey(randomHeroGreetingKey());
+      setHeroGreetingKey(randomHeroGreetingKey(Boolean(yodaFirstName)));
     }
     wasShowingHeroComposerRef.current = showHeroComposer;
   }, [showHeroComposer]);
@@ -1922,7 +1946,7 @@ export function ThreadShell({
           workspacePickerLayoutAnchor={conversationElement}
           onBrowseWorkspaceDirectories={browseWorkspaceDirectories}
           workspaceScope={workspaceScope}
-          workspaceControlsHidden={temporary}
+          workspaceControlsHidden={temporary || !yodaOperator}
           workspaceDefaultScope={workspaceDefaultScope}
           workspaceControls={workspaceControls}
           workspaceScopeDisabled={workspaceScopeDisabled}
@@ -1978,7 +2002,7 @@ export function ThreadShell({
           workspacePickerLayoutAnchor={conversationElement}
           onBrowseWorkspaceDirectories={browseWorkspaceDirectories}
           workspaceScope={workspaceScope}
-          workspaceControlsHidden={temporary}
+          workspaceControlsHidden={temporary || !yodaOperator}
           workspaceDefaultScope={workspaceDefaultScope}
           workspaceControls={workspaceControls}
           workspaceScopeDisabled={workspaceScopeDisabled}
@@ -1999,7 +2023,7 @@ export function ThreadShell({
     </div>
   ) : (
     <div className="flex w-full flex-col items-center text-center animate-in fade-in-0 slide-in-from-bottom-2 [animation-duration:220ms] motion-reduce:animate-none">
-      <HeroGreeting text={t(heroGreetingKey)} />
+      <HeroGreeting text={heroGreetingText} />
     </div>
   );
   const sessionInfoAction = historyKey ? (

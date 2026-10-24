@@ -17,6 +17,8 @@ interface ClientContextValue {
   modelName: string | null;
   ingressLimits: WebUIIngressLimits | null;
   webuiCapabilities: string[];
+  yodaOperator: boolean;
+  yodaFirstName: string | null;
 }
 
 const ClientContext = createContext<ClientContextValue | null>(null);
@@ -27,6 +29,8 @@ export function ClientProvider({
   modelName = null,
   ingressLimits = null,
   webuiCapabilities = [],
+  yodaOperator = true,
+  yodaFirstName = null,
   children,
 }: {
   client: NanobotClient;
@@ -34,14 +38,25 @@ export function ClientProvider({
   modelName?: string | null;
   ingressLimits?: WebUIIngressLimits | null;
   webuiCapabilities?: string[];
+  yodaOperator?: boolean;
+  yodaFirstName?: string | null;
   children: ReactNode;
 }) {
   const tokenRef = useRef(token);
   tokenRef.current = token;
   const getToken = useCallback(() => tokenRef.current, []);
   const value = useMemo(
-    () => ({ client, token, getToken, modelName, ingressLimits, webuiCapabilities }),
-    [client, getToken, ingressLimits, modelName, token, webuiCapabilities],
+    () => ({
+      client,
+      token,
+      getToken,
+      modelName,
+      ingressLimits,
+      webuiCapabilities,
+      yodaOperator,
+      yodaFirstName,
+    }),
+    [client, getToken, ingressLimits, modelName, token, webuiCapabilities, yodaOperator, yodaFirstName],
   );
 
   return (

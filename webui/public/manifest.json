@@ -1,7 +1,7 @@
 {
-  "name": "nanobot",
-  "short_name": "nanobot",
-  "description": "nanobot AI assistant",
+  "name": "Hawking",
+  "short_name": "Hawking",
+  "description": "Hawking AI assistant",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#ffffff",

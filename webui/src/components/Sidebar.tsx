@@ -67,6 +67,9 @@ interface SidebarProps {
   onOpenSettings: () => void;
   onOpenApps: () => void;
   onOpenSkills: () => void;
+  showSkillsNav?: boolean;
+  showAppsNav?: boolean;
+  showChannelsNav?: boolean;
   onOpenAutomations: () => void;
   onOpenChannels: () => void;
   onSettingsIntent?: () => void;
@@ -179,7 +182,7 @@ export function Sidebar(props: SidebarProps) {
           )}
         >
           <img
-            src="/brand/nanobot_mark.svg"
+            src="/brand/hawking.jpg"
             alt=""
             className="h-8 w-8 select-none object-contain"
             draggable={false}
@@ -207,28 +210,32 @@ export function Sidebar(props: SidebarProps) {
         )}
       >
         {collapsed && <>{newChatButton}{searchButton}</>}
-        <SidebarActionButton
-          collapsed={collapsed}
-          label={t("sidebar.apps")}
-          shortcut={sidebarShortcutLabel("apps", apple)}
-          ariaKeyShortcuts={sidebarShortcutAria("apps")}
-          onClick={props.onOpenApps}
-          onIntent={props.onSettingsIntent}
-          active={props.activeUtility === "apps"}
-          selectionRef={activeActionRef}
-          icon={<AppsIcon className="h-4 w-4" />}
-        />
-        <SidebarActionButton
-          collapsed={collapsed}
-          label={t("sidebar.skills.title")}
-          shortcut={sidebarShortcutLabel("skills", apple)}
-          ariaKeyShortcuts={sidebarShortcutAria("skills")}
-          onClick={props.onOpenSkills}
-          onIntent={props.onSettingsIntent}
-          active={props.activeUtility === "skills"}
-          selectionRef={activeActionRef}
-          icon={<SkillsIcon className="h-4 w-4" />}
-        />
+        {props.showAppsNav !== false ? (
+          <SidebarActionButton
+            collapsed={collapsed}
+            label={t("sidebar.apps")}
+            shortcut={sidebarShortcutLabel("apps", apple)}
+            ariaKeyShortcuts={sidebarShortcutAria("apps")}
+            onClick={props.onOpenApps}
+            onIntent={props.onSettingsIntent}
+            active={props.activeUtility === "apps"}
+            selectionRef={activeActionRef}
+            icon={<AppsIcon className="h-4 w-4" />}
+          />
+        ) : null}
+        {props.showSkillsNav !== false ? (
+          <SidebarActionButton
+            collapsed={collapsed}
+            label={t("sidebar.skills.title")}
+            shortcut={sidebarShortcutLabel("skills", apple)}
+            ariaKeyShortcuts={sidebarShortcutAria("skills")}
+            onClick={props.onOpenSkills}
+            onIntent={props.onSettingsIntent}
+            active={props.activeUtility === "skills"}
+            selectionRef={activeActionRef}
+            icon={<SkillsIcon className="h-4 w-4" />}
+          />
+        ) : null}
         <SidebarActionButton
           collapsed={collapsed}
           label={t("sidebar.automations", { defaultValue: "Automations" })}
@@ -240,17 +247,19 @@ export function Sidebar(props: SidebarProps) {
           selectionRef={activeActionRef}
           icon={<AutomationsIcon className="h-4 w-4" />}
         />
-        <SidebarActionButton
-          collapsed={collapsed}
-          label={t("settings.nav.channels")}
-          shortcut={sidebarShortcutLabel("channels", apple)}
-          ariaKeyShortcuts={sidebarShortcutAria("channels")}
-          onClick={props.onOpenChannels}
-          onIntent={props.onSettingsIntent}
-          active={props.activeUtility === "channels"}
-          selectionRef={activeActionRef}
-          icon={<ChannelsIcon className="h-4 w-4" />}
-        />
+        {props.showChannelsNav !== false ? (
+          <SidebarActionButton
+            collapsed={collapsed}
+            label={t("settings.nav.channels")}
+            shortcut={sidebarShortcutLabel("channels", apple)}
+            ariaKeyShortcuts={sidebarShortcutAria("channels")}
+            onClick={props.onOpenChannels}
+            onIntent={props.onSettingsIntent}
+            active={props.activeUtility === "channels"}
+            selectionRef={activeActionRef}
+            icon={<ChannelsIcon className="h-4 w-4" />}
+          />
+        ) : null}
         {props.archivedCount ? (
           <SidebarActionButton
             collapsed={collapsed}

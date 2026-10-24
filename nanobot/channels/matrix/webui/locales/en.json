@@ -9,7 +9,7 @@
       },
       "userId": {
         "label": "User ID",
-        "placeholder": "@nanobot:matrix.org"
+        "placeholder": "@Hawking:matrix.org"
       },
       "password": {
         "label": "Password",

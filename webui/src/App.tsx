@@ -8,8 +8,8 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { ArrowRight, ChevronDown, Eye, EyeOff, Moon, ShieldCheck, Sun, X } from "lucide-react";
-import { Trans, useTranslation } from "react-i18next";
+import { ChevronDown, Eye, EyeOff, Moon, ShieldCheck, Sun, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { channelUiPresentation } from "@/channel-plugins/registry";
 import { StarPrompt } from "@/components/StarPrompt";
 import { Sidebar } from "@/components/Sidebar";
@@ -105,6 +105,13 @@ import {
   createTemporaryChatSession,
   deriveTemporaryChatTitle,
 } from "@/lib/temporary-chat";
+import {
+  bootstrapYodaFirstName,
+  bootstrapYodaOperator,
+  coerceSettingsSection,
+  defaultSettingsSection,
+  isOperatorOnlyShellView,
+} from "@/lib/yoda-operator";
 
 type BootState =
   | { status: "loading" }
@@ -119,6 +126,8 @@ type BootState =
       ingressLimits: BootstrapResponse["limits"] | null;
       runtimeSurface: RuntimeSurface;
       webuiCapabilities: string[];
+      yodaOperator: boolean;
+      yodaFirstName: string | null;
     };
 
 function bootstrapCapabilities(boot: BootstrapResponse): string[] {
@@ -385,8 +394,10 @@ function AuthForm({
   onSecret: (secret: string) => void;
 }) {
   const { t } = useTranslation();
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [value, setValue] = useState("");
+  const emailRef = useRef<HTMLInputElement>(null);
+  const passwordRef = useRef<HTMLInputElement>(null);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [validationError, setValidationError] = useState<"required" | "invalid" | null>(
@@ -402,126 +413,148 @@ function AuthForm({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const secret = value.trim();
-    if (!secret) {
-      setValue("");
+    const ident = email.trim();
+    const pass = password;
+    if (!ident || !pass) {
       setValidationError("required");
-      inputRef.current?.focus();
+      if (!ident) emailRef.current?.focus();
+      else passwordRef.current?.focus();
       return;
     }
     setSubmitting(true);
-    onSecret(secret);
+    onSecret(`${ident}:${pass}`);
   };
 
   return (
-    <main className="flex h-full w-full flex-col overflow-y-auto bg-background">
+    <main className="flex min-h-full w-full flex-col bg-background">
       <div className="mx-5 mt-5 shrink-0 self-end sm:mx-8">
         <LanguageSwitcher className="h-8 min-w-0 gap-2 px-3 text-xs" />
       </div>
-      <div className="flex flex-1 shrink-0 items-center justify-center px-6 pb-20 pt-8">
+      <div className="flex flex-1 items-center justify-center px-6 py-10">
         <section
           aria-labelledby="webui-auth-title"
-          className="w-full max-w-xs"
+          className="w-full max-w-[22rem]"
         >
-          <div className="text-center">
-            <img
-              src="/brand/nanobot_mark.svg"
-              alt=""
-              width={56}
-              height={56}
-              draggable={false}
-              className="mx-auto mb-5 h-14 w-14 select-none"
-            />
-            <h1 id="webui-auth-title" className="text-balance text-2xl font-semibold tracking-tight text-foreground sm:text-[1.75rem]">
-              {t("app.auth.title")}
-            </h1>
-          </div>
-          <form onSubmit={handleSubmit} className="mt-8">
-            <div className="relative">
-              <Input
-                ref={inputRef}
-                id="webui-access-password"
-                name="webui-access-password"
-                aria-label={t("app.auth.label")}
-                type={passwordVisible ? "text" : "password"}
-                autoComplete="current-password"
-                value={value}
-                onChange={(e) => {
-                  setValue(e.target.value);
-                  setValidationError(null);
-                }}
-                disabled={submitting}
-                aria-invalid={validationError ? true : undefined}
-                aria-describedby={validationError ? "webui-auth-error" : undefined}
-                placeholder={errorMessage ?? undefined}
-                className={cn(
-                  "h-12 rounded-full border-foreground/15 bg-muted/30 px-4 pr-24 text-base",
-                  validationError && "placeholder:text-[13px] placeholder:text-red-600 dark:placeholder:text-red-400",
-                )}
-                autoFocus
+          <div className="rounded-2xl border border-border/50 bg-card/30 p-8 shadow-sm backdrop-blur-sm">
+            <div className="text-center">
+              <img
+                src="/brand/hawking.jpg"
+                alt=""
+                width={72}
+                height={72}
+                draggable={false}
+                className="mx-auto mb-5 h-[4.5rem] w-[4.5rem] select-none rounded-2xl object-cover shadow-md ring-1 ring-border/40"
               />
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                disabled={submitting}
-                aria-label={t(
-                  passwordVisible ? "app.auth.hidePassword" : "app.auth.showPassword",
-                )}
-                aria-controls="webui-access-password"
-                onClick={() => setPasswordVisible((visible) => !visible)}
-                className="absolute right-12 top-1/2 h-10 w-10 -translate-y-1/2 rounded-full text-muted-foreground hover:text-foreground"
+              <h1
+                id="webui-auth-title"
+                className="text-balance text-xl font-semibold tracking-tight text-foreground sm:text-2xl"
               >
-                {passwordVisible ? (
-                  <EyeOff className="h-4 w-4" strokeWidth={1.75} aria-hidden />
-                ) : (
-                  <Eye className="h-4 w-4" strokeWidth={1.75} aria-hidden />
-                )}
-              </Button>
+                {t("app.auth.title")}
+              </h1>
+            </div>
+            <form onSubmit={handleSubmit} className="mt-8 space-y-4">
+              <div className="space-y-2 text-start">
+                <label
+                  htmlFor="webui-access-email"
+                  className="block text-sm font-medium text-foreground/90"
+                >
+                  {t("app.auth.emailLabel")}
+                </label>
+                <Input
+                  ref={emailRef}
+                  id="webui-access-email"
+                  name="webui-access-email"
+                  type="text"
+                  inputMode="email"
+                  autoComplete="username"
+                  value={email}
+                  onChange={(e) => {
+                    setEmail(e.target.value);
+                    setValidationError(null);
+                  }}
+                  disabled={submitting}
+                  aria-invalid={validationError === "required" && !email.trim() ? true : undefined}
+                  className="h-11 rounded-xl border-foreground/15 bg-muted/40 px-3.5 text-base"
+                  autoFocus
+                />
+              </div>
+              <div className="space-y-2 text-start">
+                <label
+                  htmlFor="webui-access-password"
+                  className="block text-sm font-medium text-foreground/90"
+                >
+                  {t("app.auth.label")}
+                </label>
+                <div className="relative">
+                  <Input
+                    ref={passwordRef}
+                    id="webui-access-password"
+                    name="webui-access-password"
+                    aria-label={t("app.auth.label")}
+                    type={passwordVisible ? "text" : "password"}
+                    autoComplete="current-password"
+                    value={password}
+                    onChange={(e) => {
+                      setPassword(e.target.value);
+                      setValidationError(null);
+                    }}
+                    disabled={submitting}
+                    aria-invalid={validationError ? true : undefined}
+                    aria-describedby={validationError ? "webui-auth-error" : undefined}
+                    className="h-11 rounded-xl border-foreground/15 bg-muted/40 px-3.5 pe-11 text-base"
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    disabled={submitting}
+                    aria-label={t(
+                      passwordVisible ? "app.auth.hidePassword" : "app.auth.showPassword",
+                    )}
+                    aria-controls="webui-access-password"
+                    onClick={() => setPasswordVisible((visible) => !visible)}
+                    className="absolute end-1 top-1/2 h-9 w-9 -translate-y-1/2 rounded-lg text-muted-foreground hover:text-foreground"
+                  >
+                    {passwordVisible ? (
+                      <EyeOff className="h-4 w-4" strokeWidth={1.75} aria-hidden />
+                    ) : (
+                      <Eye className="h-4 w-4" strokeWidth={1.75} aria-hidden />
+                    )}
+                  </Button>
+                </div>
+              </div>
+              {errorMessage ? (
+                <p
+                  id="webui-auth-error"
+                  role="alert"
+                  className="text-sm leading-snug text-red-600 dark:text-red-400"
+                >
+                  {errorMessage}
+                </p>
+              ) : null}
               <Button
                 type="submit"
-                variant="ghost"
-                size="icon"
                 disabled={submitting}
-                aria-label={t("app.auth.submit")}
-                title={t("app.auth.submit")}
-                className="absolute right-1 top-1/2 h-10 w-10 -translate-y-1/2 rounded-full"
+                className="h-11 w-full rounded-xl text-base font-medium"
               >
-                <ArrowRight className="h-4 w-4" strokeWidth={1.75} aria-hidden />
+                {submitting ? t("app.auth.submitting", { defaultValue: "Signing in…" }) : t("app.auth.submit")}
               </Button>
-            </div>
-            {errorMessage ? (
-              <p id="webui-auth-error" role="alert" className="sr-only">
-                {errorMessage}
-              </p>
-            ) : null}
-          </form>
-          <Disclosure
-            className="mt-4"
-            summaryClassName="flex min-h-11 items-center justify-center gap-1.5 rounded-compact text-[13px] text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-            contentClassName="rounded-control bg-muted/50 p-4 text-sm leading-6 text-muted-foreground"
-            summary={(
-              <>
-                <span>{t("app.auth.helpTitle")}</span>
-                <ChevronDown className="h-3.5 w-3.5 shrink-0 transition-transform group-data-[state=open]/disclosure:rotate-180 motion-reduce:transition-none" strokeWidth={1.5} aria-hidden />
-              </>
-            )}
-          >
-            <p>{t("app.auth.helpConfig")}</p>
-            <code className="mt-2 block rounded-compact bg-background px-3 py-2 font-mono text-xs text-foreground [overflow-wrap:anywhere]">
-              ~/.nanobot/config.json
-            </code>
-            <p className="mt-4">{t("app.auth.helpSecret")}</p>
-            <code className="mt-2 block rounded-compact bg-background px-3 py-2 font-mono text-xs text-foreground [overflow-wrap:anywhere]">
-              channels.websocket.tokenIssueSecret
-            </code>
-            <p className="mt-3">
-              <Trans
-                i18nKey="app.auth.helpFallback"
-                components={{ code: <code className="font-mono text-xs text-foreground [overflow-wrap:anywhere]" /> }}
-              />
-            </p>
-          </Disclosure>
+            </form>
+            <Disclosure
+              className="mt-6 border-t border-border/40 pt-4"
+              summaryClassName="flex min-h-10 items-center justify-center gap-1.5 rounded-compact text-[13px] text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+              contentClassName="mt-3 space-y-2 rounded-control bg-muted/40 p-4 text-sm leading-6 text-muted-foreground"
+              summary={(
+                <>
+                  <span>{t("app.auth.helpTitle")}</span>
+                  <ChevronDown className="h-3.5 w-3.5 shrink-0 transition-transform group-data-[state=open]/disclosure:rotate-180 motion-reduce:transition-none" strokeWidth={1.5} aria-hidden />
+                </>
+              )}
+            >
+              <p>{t("app.auth.helpConfig")}</p>
+              <p>{t("app.auth.helpSecret")}</p>
+            </Disclosure>
+          </div>
         </section>
       </div>
     </main>
@@ -982,6 +1015,8 @@ export default function App() {
               ingressLimits: boot.limits ?? current.ingressLimits,
               runtimeSurface,
               webuiCapabilities: bootstrapCapabilities(boot),
+              yodaOperator: bootstrapYodaOperator(boot),
+              yodaFirstName: bootstrapYodaFirstName(boot),
             }
           : current,
       );
@@ -1030,6 +1065,8 @@ export default function App() {
             ingressLimits: boot.limits ?? null,
             runtimeSurface,
             webuiCapabilities: bootstrapCapabilities(boot),
+            yodaOperator: bootstrapYodaOperator(boot),
+            yodaFirstName: bootstrapYodaFirstName(boot),
           });
         } catch (e) {
           if (cancelled) return;
@@ -1150,6 +1187,8 @@ export default function App() {
       modelName={state.modelName}
       ingressLimits={state.ingressLimits}
       webuiCapabilities={state.webuiCapabilities}
+      yodaOperator={state.yodaOperator}
+      yodaFirstName={state.yodaFirstName}
     >
       <RemoteInstances><Shell
         runtimeSurface={state.runtimeSurface}
@@ -1194,7 +1233,7 @@ function Shell({
   }, [reportManagementSurface, theme]);
   const remoteConnectionsRef = useRef(remoteConnections);
   remoteConnectionsRef.current = remoteConnections;
-  const { client, getToken } = useClient();
+  const { client, getToken, yodaOperator } = useClient();
   useReconnectRuns(client, getToken);
   const {
     sessions,
@@ -1362,27 +1401,57 @@ function Shell({
   const navigate = useCallback(
     (route: ShellRoute, options?: { replace?: boolean }) => {
       const leave = () => {
+        let nextRoute = route;
+        if (!yodaOperator) {
+          const settingsSection = coerceSettingsSection(route.settingsSection, false);
+          const view = route.view === "skills"
+            ? "settings"
+            : isOperatorOnlyShellView(route.view, route.settingsSection, false)
+              ? "settings"
+              : route.view;
+          nextRoute = { ...route, view, settingsSection };
+        }
         // The visible sidebar always belongs to its existing host. Navigation
         // dismisses global management without switching to a different host.
         if (remoteConnectionsRef.current?.managing) remoteConnectionsRef.current.closeManagement();
-        setActiveKey(route.activeKey);
-        setView(route.view);
-        setSettingsInitialSection(route.settingsSection);
+        setActiveKey(nextRoute.activeKey);
+        setView(nextRoute.view);
+        setSettingsInitialSection(nextRoute.settingsSection);
         writeShellRoute({
-          ...route,
-          temporary: route.temporary || Boolean(route.activeKey && temporarySessionsRef.current[route.activeKey]),
+          ...nextRoute,
+          temporary: nextRoute.temporary || Boolean(nextRoute.activeKey && temporarySessionsRef.current[nextRoute.activeKey]),
         }, options?.replace);
       };
       if (currentShellRouteRef.current.view === "settings" && route.view !== "settings" && settingsExitGuardRef.current) {
         settingsExitGuardRef.current(leave);
       } else leave();
     },
-    [],
+    [yodaOperator],
   );
 
   useEffect(() => {
+    if (yodaOperator) return;
+    if (!isOperatorOnlyShellView(view, settingsInitialSection, false)) return;
+    navigate({
+      view: "settings",
+      activeKey,
+      settingsSection: coerceSettingsSection(settingsInitialSection, false),
+      temporary: Boolean(activeKey && temporarySessions[activeKey]),
+    }, { replace: true });
+  }, [activeKey, navigate, settingsInitialSection, temporarySessions, view, yodaOperator]);
+
+  useEffect(() => {
     const applyRoute = () => {
-      const route = readShellRoute();
+      let route = readShellRoute();
+      if (!yodaOperator) {
+        const settingsSection = coerceSettingsSection(route.settingsSection, false);
+        const nextView = route.view === "skills"
+          ? "settings"
+          : isOperatorOnlyShellView(route.view, route.settingsSection, false)
+            ? "settings"
+            : route.view;
+        route = { ...route, view: nextView, settingsSection };
+      }
       if (route.view === "remote") setMobileSidebarOpen(false);
       if (currentShellRouteRef.current.view === "settings" && route.view !== "settings" && settingsExitGuardRef.current) {
         writeShellRoute(currentShellRouteRef.current, true);
@@ -1410,7 +1479,7 @@ function Shell({
       window.removeEventListener("hashchange", applyRoute);
       window.removeEventListener("popstate", applyRoute);
     };
-  }, []);
+  }, [yodaOperator]);
 
   useEffect(() => {
     temporarySessionsRef.current = temporarySessions;
@@ -2179,11 +2248,12 @@ function Shell({
     [onSelectChat],
   );
 
-  const onOpenSettings = useCallback((section: SettingsSectionKey = "overview") => {
+  const onOpenSettings = useCallback((section: SettingsSectionKey = defaultSettingsSection(yodaOperator)) => {
     setSessionSearchOpen(false);
-    navigate({ view: shellViewForSettingsSection(section), activeKey, settingsSection: section });
+    const nextSection = coerceSettingsSection(section, yodaOperator);
+    navigate({ view: shellViewForSettingsSection(nextSection), activeKey, settingsSection: nextSection });
     setMobileSidebarOpen(false);
-  }, [activeKey, navigate]);
+  }, [activeKey, navigate, yodaOperator]);
 
   const onSettingsIntent = useCallback(() => {
     void loadSettingsView();
@@ -2194,10 +2264,11 @@ function Shell({
   }, [onOpenSettings]);
 
   const onOpenApps = useCallback(() => {
+    if (!yodaOperator) return;
     setSessionSearchOpen(false);
     navigate({ view: "apps", activeKey, settingsSection: "apps" });
     setMobileSidebarOpen(false);
-  }, [activeKey, navigate]);
+  }, [activeKey, navigate, yodaOperator]);
 
   const onOpenAutomations = useCallback(() => {
     setSessionSearchOpen(false);
@@ -2206,16 +2277,18 @@ function Shell({
   }, [activeKey, navigate]);
 
   const onOpenChannels = useCallback(() => {
+    if (!yodaOperator) return;
     setSessionSearchOpen(false);
     navigate({ view: "channels", activeKey, settingsSection: "channels" });
     setMobileSidebarOpen(false);
-  }, [activeKey, navigate]);
+  }, [activeKey, navigate, yodaOperator]);
 
   const onOpenSkills = useCallback(() => {
+    if (!yodaOperator) return;
     setSessionSearchOpen(false);
     navigate({ view: "skills", activeKey, settingsSection: "skills" });
     setMobileSidebarOpen(false);
-  }, [activeKey, navigate]);
+  }, [activeKey, navigate, yodaOperator]);
 
   useEffect(() => {
     const actions = { newChat: onNewChat, search: onOpenSessionSearch, apps: onOpenApps,
@@ -2224,22 +2297,24 @@ function Shell({
       if (!localActive) return;
       const action = matchSidebarShortcut(event);
       if (!action) return;
+      if (!yodaOperator && (action === "skills" || action === "apps" || action === "channels")) return;
       event.preventDefault();
       actions[action]();
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [localActive, onNewChat, onOpenSessionSearch, onOpenApps, onOpenSkills, onOpenAutomations, onOpenChannels, onOpenSettings]);
+  }, [localActive, onNewChat, onOpenSessionSearch, onOpenApps, onOpenSkills, onOpenAutomations, onOpenChannels, onOpenSettings, yodaOperator]);
 
   const onSettingsSectionChange = useCallback(
     (section: SettingsSectionKey) => {
+      const nextSection = coerceSettingsSection(section, yodaOperator);
       navigate({
-        view: shellViewForSettingsSection(section),
+        view: shellViewForSettingsSection(nextSection),
         activeKey,
-        settingsSection: section,
+        settingsSection: nextSection,
       });
     },
-    [activeKey, navigate],
+    [activeKey, navigate, yodaOperator],
   );
 
   const onBackToChat = useCallback(() => {
@@ -2813,6 +2888,9 @@ function Shell({
     onOpenAutomations,
     onOpenChannels,
     onOpenSkills,
+    showSkillsNav: yodaOperator,
+    showAppsNav: yodaOperator,
+    showChannelsNav: yodaOperator,
     onSettingsIntent,
     onOpenSearch: onOpenSessionSearch,
     activeUtility: !managingConnections && (view === "apps" || view === "automations" || view === "skills" || view === "channels") ? view : null,

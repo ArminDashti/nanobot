@@ -178,7 +178,7 @@ function RemoteConnectionIllustration() {
       <path d="M32 39 h.01 M36 39 h.01 M40 39 h.01" strokeWidth="2.5" />
     </g>
     <rect x="146" y="10" width="50" height="70" rx="3" />
-    <image href="/brand/nanobot_mark.svg" x="155" y="17" width="32" height="32" />
+    <image href="/brand/hawking.jpg" x="155" y="17" width="32" height="32" />
     <path d="M146 53 H196 M146 66 H196 M152 60 H177 M152 73 H177 M152 80 V83 H158 V80 M184 80 V83 H190 V80" />
     <circle cx="188" cy="60" r="1.8" />
     <circle cx="188" cy="73" r="1.8" />

@@ -545,6 +545,10 @@ export interface BootstrapResponse {
   terminal?: {
     webui?: { capabilities?: string[] };
   };
+  yoda?: {
+    operator?: boolean;
+    firstName?: string;
+  };
   token?: string;
   api_token?: string;
   ws_path: string;

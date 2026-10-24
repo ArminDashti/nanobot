@@ -79,7 +79,7 @@
     "needsSetup": "Needs authorization",
     "qrAlt": "Feishu connection QR code",
     "scanTitle": "Scan with Feishu",
-    "scanDescription": "Use Feishu or Lark on your phone to scan this code. nanobot will finish setup automatically after authorization.",
+    "scanDescription": "Use Feishu or Lark on your phone to scan this code. Hawking will finish setup automatically after authorization.",
     "waiting": "Waiting for authorization...",
     "connected": "Feishu is connected.",
     "stopped": "Connection stopped.",

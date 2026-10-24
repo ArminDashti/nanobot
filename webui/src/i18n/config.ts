@@ -2,15 +2,7 @@ export const LOCALE_STORAGE_KEY = "nanobot.locale";
 
 export const supportedLocales = [
   { code: "en", nativeLabel: "English" },
-  { code: "zh-CN", nativeLabel: "简体中文" },
-  { code: "zh-TW", nativeLabel: "繁體中文" },
-  { code: "fr", nativeLabel: "Français" },
-  { code: "ja", nativeLabel: "日本語" },
-  { code: "ko", nativeLabel: "한국어" },
-  { code: "es", nativeLabel: "Español" },
-  { code: "pt-BR", nativeLabel: "Português (Brasil)" },
-  { code: "vi", nativeLabel: "Tiếng Việt" },
-  { code: "id", nativeLabel: "Bahasa Indonesia" },
+  { code: "fa", nativeLabel: "فارسی" },
 ] as const;
 
 export type SupportedLocale = (typeof supportedLocales)[number]["code"];
@@ -29,19 +21,8 @@ export function normalizeLocale(
   if (exact) return exact.code;
 
   const lower = trimmed.toLowerCase();
-  if (lower === "zh" || lower.startsWith("zh-cn") || lower.startsWith("zh-sg")) {
-    return "zh-CN";
-  }
-  if (
-    lower.startsWith("zh-tw") ||
-    lower.startsWith("zh-hk") ||
-    lower.startsWith("zh-mo") ||
-    lower.startsWith("zh-hant")
-  ) {
-    return "zh-TW";
-  }
-  if (lower === "pt" || lower.startsWith("pt-")) {
-    return "pt-BR";
+  if (lower === "fa" || lower.startsWith("fa-") || lower === "persian") {
+    return "fa";
   }
 
   const base = lower.split("-")[0];
@@ -77,4 +58,5 @@ export function persistLocale(locale: SupportedLocale): void {
 export function applyDocumentLocale(locale: SupportedLocale): void {
   if (typeof document === "undefined") return;
   document.documentElement.lang = locale;
+  document.documentElement.dir = locale === "fa" ? "rtl" : "ltr";
 }

@@ -14,7 +14,7 @@ const NETWORK_FIRST_STATIC_PATHS = new Set([
   "/brand/nanobot_icon_192.png",
   "/brand/nanobot_icon_512.png",
   "/brand/nanobot_icon_maskable.png",
-  "/brand/nanobot_mark.svg",
+  "/brand/hawking.jpg",
 ]);
 
 function responseMayBeCached(response) {

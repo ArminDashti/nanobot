@@ -9,7 +9,7 @@
     <meta name="color-scheme" content="light dark" />
     <meta
       name="description"
-      content="nanobot web UI — chat with your nanobot workspace."
+      content="Hawking web UI — chat with your nanobot workspace."
       data-i18n-meta="description"
     />
     <meta
@@ -21,11 +21,15 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-    <meta name="apple-mobile-web-app-title" content="nanobot" />
-    <link rel="icon" type="image/svg+xml" href="/brand/nanobot_mark.svg" />
+    <meta name="apple-mobile-web-app-title" content="Hawking" />
+    <link rel="icon" type="image/jpeg" href="/brand/hawking.jpg" />
     <link rel="alternate icon" type="image/png" sizes="32x32" href="/brand/nanobot_favicon_32.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/brand/nanobot_apple_touch.png" />
     <link rel="manifest" href="/manifest.json" />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/rastikerdar/vazir-font@v30.1.0/dist/font-face.css"
+    />
     <style>
       html,
       body,
@@ -55,6 +59,10 @@
       html.dark body {
         background: #303030;
         color: #fafafa;
+      }
+
+      html[lang="fa"] body {
+        font-family: "Vazir", Tahoma, "Segoe UI", Arial, sans-serif;
       }
 
       /* Work around iOS standalone's scroll-edge blur with a fixed color surface.
@@ -140,6 +148,10 @@
             boot: "Loading nanobot…",
             description: "nanobot web UI — chat with your nanobot workspace."
           },
+          fa: {
+            boot: "در حال بارگذاری…",
+            description: "رابط وب — گفتگو با فضای کار شما."
+          },
           "zh-CN": {
             boot: "正在加载 nanobot…",
             description: "nanobot Web UI —— 与你的 nanobot 工作区对话。"
@@ -198,6 +210,9 @@
           if (lower === "pt" || lower.indexOf("pt-") === 0) {
             return "pt-BR";
           }
+          if (lower === "fa" || lower.indexOf("fa-") === 0 || lower === "persian") {
+            return "fa";
+          }
           var base = lower.split("-")[0];
           return copy[base] ? base : "en";
         }
@@ -212,6 +227,9 @@
           var locale = normalizeLocale(detected);
           var localized = copy[locale] || copy.en;
           document.documentElement.lang = locale;
+          if (locale === "fa") {
+            document.documentElement.dir = "rtl";
+          }
           var description = document.querySelector('[data-i18n-meta=\"description\"]');
           if (description) description.setAttribute("content", localized.description);
           var boot = document.querySelector("[data-boot-copy]");

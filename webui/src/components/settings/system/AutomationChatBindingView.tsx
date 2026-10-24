@@ -24,7 +24,7 @@ function ChatIdentity({ chat, title, showBrandLogos }: { chat: AutomationChat; t
   };
   return <span className="flex min-w-0 items-center gap-2.5 text-start">
     <span aria-hidden className="relative h-6 w-6 shrink-0">
-      {chat.channel === "websocket" ? <img src="/brand/nanobot_mark.svg" alt="" className="h-6 w-6" />
+      {chat.channel === "websocket" ? <img src="/brand/hawking.jpg" alt="" className="h-6 w-6" />
         : <span className="absolute left-0 top-0 origin-top-left scale-75"><ChannelLogo feature={feature} showBrandLogos={showBrandLogos} /></span>}
     </span>
     <span className="flex min-w-0 flex-col gap-0.5">

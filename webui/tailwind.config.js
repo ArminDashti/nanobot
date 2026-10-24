@@ -22,6 +22,7 @@ export default {
     },
     extend: {
       fontFamily: {
+        persian: ['Vazir', 'Tahoma', 'Segoe UI', 'Arial', 'sans-serif'],
         sans: [
           "system-ui",
           "-apple-system",

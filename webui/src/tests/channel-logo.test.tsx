@@ -129,7 +129,7 @@ describe("channel logos", () => {
   it("keeps the local nanobot mark and unknown channel initials readable", () => {
     const { container, rerender } = render(<ChannelLogo feature={feature("websocket")} showBrandLogos />);
     expectFootprint(container.firstElementChild!);
-    expect(container.querySelector("img")).toHaveAttribute("src", "/brand/nanobot_mark.svg");
+    expect(container.querySelector("img")).toHaveAttribute("src", "/brand/hawking.jpg");
 
     rerender(<ChannelLogo feature={feature("custom-channel")} showBrandLogos />);
     expectFootprint(container.firstElementChild!);

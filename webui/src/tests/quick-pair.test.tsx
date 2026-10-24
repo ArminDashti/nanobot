@@ -168,14 +168,14 @@ describe("quick pairing", () => {
     const dialog = screen.getByRole("dialog");
     expect(dialog).toHaveAccessibleName("Connect to remote nanobot");
     expect(dialog).toHaveAccessibleDescription(i18n.t("remote.pair.introHint"));
-    const illustration = dialog.querySelector('image[href="/brand/nanobot_mark.svg"]')?.closest("svg");
+    const illustration = dialog.querySelector('image[href="/brand/hawking.jpg"]')?.closest("svg");
     expect(illustration).toHaveAttribute("aria-hidden", "true");
     expect(illustration).toHaveAttribute("focusable", "false");
     expect(dialog.querySelector(".invisible")).toBeNull();
     expect(screen.queryByText(i18n.t("remote.pair.afterCopyHint"))).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Copy command" }));
     await screen.findByRole("heading", { name: "Command copied" });
-    expect(dialog.querySelector('image[href="/brand/nanobot_mark.svg"]')?.closest("svg")).toBe(illustration);
+    expect(dialog.querySelector('image[href="/brand/hawking.jpg"]')?.closest("svg")).toBe(illustration);
     expect(screen.queryByText(i18n.t("remote.pair.introHint"))).toBeNull();
   });
   it("keeps the illustration out of code entry and authorization review", async () => {
@@ -183,11 +183,11 @@ describe("quick pairing", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Copy command" })).toBeEnabled());
     chooseOtherWay("Connection code");
     const dialog = screen.getByRole("dialog");
-    expect(dialog.querySelector('image[href="/brand/nanobot_mark.svg"]')).toBeNull();
+    expect(dialog.querySelector('image[href="/brand/hawking.jpg"]')).toBeNull();
     fireEvent.change(screen.getByRole("textbox", { name: "Connection code" }), { target: { value: "nbpc1.encrypted" } });
     fireEvent.click(screen.getByRole("button", { name: "Review connection" }));
     await screen.findByRole("heading", { name: "Open this nanobot?" });
-    expect(dialog.querySelector('image[href="/brand/nanobot_mark.svg"]')).toBeNull();
+    expect(dialog.querySelector('image[href="/brand/hawking.jpg"]')).toBeNull();
     expect(screen.getByText(i18n.t("remote.pair.access"))).toBeVisible();
     expect(mocks.connect).not.toHaveBeenCalled();
   });
