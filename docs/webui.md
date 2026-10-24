@@ -121,7 +121,7 @@ Selecting a Markdown file opens **Preview**; **Source** shows the original text.
 
 Text previews are limited to 384 KiB and indicate truncation. Very large or minified source may remain plain text. Image previews support PNG, JPEG, GIF and WebP up to 8 MiB. HTML and SVG files display as read-only source.
 
-Explicit Markdown images appear inline; image attachments use a gallery. Ordinary image file links open the preview instead.
+Explicit Markdown images appear inline; image attachments use a gallery. Other files appear as compact download cards below the image and video previews, with a file-type icon, filename and download action. File-type icons do not indicate preview support. Ordinary image file links open the preview instead.
 
 Mermaid diagrams render after the reply finishes. The source remains available if rendering fails. Links, external images and executable HTML inside diagrams are disabled.
 

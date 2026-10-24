@@ -2156,6 +2156,7 @@
     "imageAttachment": "画像の添付",
     "videoAttachment": "動画の添付",
     "fileAttachment": "ファイルの添付",
+    "downloadAttachment": "{{name}} をダウンロード",
     "attachmentUnavailable": "添付ファイルを利用できません",
     "dataTable": "データテーブル",
     "fileEditPreparing": "ファイル編集を準備中…",

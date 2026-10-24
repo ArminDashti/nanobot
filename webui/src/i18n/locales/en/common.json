@@ -2539,6 +2539,7 @@
     "imageAttachment": "Image attachment",
     "videoAttachment": "Video attachment",
     "fileAttachment": "File attachment",
+    "downloadAttachment": "Download {{name}}",
     "attachmentUnavailable": "Attachment unavailable",
     "dataTable": "Data table",
     "fileEditPreparing": "Preparing file edit…",

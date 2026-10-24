@@ -2156,6 +2156,7 @@
     "imageAttachment": "Lampiran gambar",
     "videoAttachment": "Lampiran video",
     "fileAttachment": "Lampiran file",
+    "downloadAttachment": "Unduh {{name}}",
     "attachmentUnavailable": "Lampiran tidak tersedia",
     "dataTable": "Tabel data",
     "fileEditPreparing": "Menyiapkan perubahan file…",

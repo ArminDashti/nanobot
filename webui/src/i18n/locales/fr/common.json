@@ -2156,6 +2156,7 @@
     "imageAttachment": "Pièce jointe image",
     "videoAttachment": "Pièce jointe vidéo",
     "fileAttachment": "Pièce jointe",
+    "downloadAttachment": "Télécharger {{name}}",
     "attachmentUnavailable": "Pièce jointe indisponible",
     "dataTable": "Tableau de données",
     "fileEditPreparing": "Préparation de la modification du fichier…",
