@@ -496,6 +496,9 @@ for (const elapsedMs of [0, 80]) test(`fast responses reclaim completed slots an
   history.useFastResponse(true);
   await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
   const { body, header } = await openSettledHistory(page);
+  // The lazy plain-text fallback has a different height; measure the spring only after Markdown loads.
+  await expect(body.getByText("Historical answer.", { exact: true }).first()).toBeVisible();
+  await stableLayout(body);
   await positionAtTop(body);
   await expect(header).toHaveAttribute("data-state", "ready");
   await expect(header).not.toBeInViewport();
