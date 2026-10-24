@@ -68,7 +68,7 @@ Before the third release, remove `provider_api_migration.py`, its import, `Provi
 
 ### TUI preflight without a release tag
 
-Use Bun 1.3.13 and a clean checkout; no tag or GitHub Release is required. Use the same `<target>` for preparation, compilation and notice generation: they share the target definitions in `scripts/targets.ts`, with the internal resvg loader selected by `scripts/target-bindings.ts`. Run targets sequentially because native dependency preparation updates shared `node_modules`; the loader is generated per build without rewriting dependency source:
+Use Bun 1.3.13 and a clean checkout; no tag or GitHub Release is required. Use the same `<target>` for preparation, compilation and notice generation. Run targets sequentially because preparation updates shared `node_modules`:
 
 ```bash
 cd tui
@@ -84,7 +84,7 @@ Repeat for `darwin-arm64`, `darwin-x64`, `linux-arm64`, `linux-x64` and `win32-x
 
 Candidate builds bundle minified JavaScript and the standalone Bun runtime with the additional precompiled bytecode cache disabled. Linux targets include both GNU and musl native variants, and x64 retains Bun's baseline CPU variant. Builds enforce a 135 MiB executable budget on Windows/Linux x64; other targets retain the existing 150 MiB ceiling until measured. The `dist/<executable>.size.json` report identifies the compiled, pre-signing executable and expected native packages; final archive manifests identify signed release bytes.
 
-Before accepting the bytecode-off policy, compare native real-TUI first-screen, first Mermaid worker render, warm render and cancellation/worker-restart behavior against the same source and pinned toolchain with bytecode enabled. Retain measured latency distributions and executable, ZIP and final platform-wheel byte counts for each target; do not infer download savings from executable size or treat cross-compilation and `--desktop-protocol` as native UI/renderer acceptance.
+Before release, measure TUI first-screen and Mermaid render latency on each supported target, including first and warm renders. Verify cancellation and worker restart. Retain latency distributions and record executable, ZIP and final platform-wheel sizes separately. Cross-compilation and startup probes do not replace native interactive acceptance.
 
 ### Build the PyPI platform wheels
 
