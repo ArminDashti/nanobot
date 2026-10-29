@@ -226,7 +226,8 @@ class TestReadPdf:
         doc.close()
 
         result = await tool.execute(path=str(pdf_path))
-        assert "Hello PDF World" in result
+        text = "\n".join(b["text"] for b in result if b.get("type") == "text")
+        assert "Hello PDF World" in text
 
     @pytest.mark.asyncio
     async def test_pdf_pages_parameter(self, tool, tmp_path):
@@ -240,9 +241,10 @@ class TestReadPdf:
         doc.close()
 
         result = await tool.execute(path=str(pdf_path), pages="2-3")
-        assert "Page 2 content" in result
-        assert "Page 3 content" in result
-        assert "Page 1 content" not in result
+        text = "\n".join(b["text"] for b in result if b.get("type") == "text")
+        assert "Page 2 content" in text
+        assert "Page 3 content" in text
+        assert "Page 1 content" not in text
 
     @pytest.mark.asyncio
     async def test_pdf_rejects_invalid_page_range(self, tool, tmp_path):

@@ -2,9 +2,11 @@
 
 # pyright: reportPrivateUsage=false, reportUnusedFunction=false
 
+import base64
 import difflib
 import hashlib
 import mimetypes
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -15,6 +17,7 @@ from nanobot.agent.tools.file_state import FileStates, current_file_states
 from nanobot.agent.tools.filesystem_config import FileToolsConfig
 from nanobot.agent.tools.path_utils import resolve_workspace_path
 from nanobot.agent.tools.schema import (
+    ArraySchema,
     BooleanSchema,
     IntegerSchema,
     StringSchema,
@@ -253,7 +256,7 @@ def _builtin_skill_read_path(path: str) -> Path | None:
             description="Maximum lines to return (default 2000)",
             minimum=1,
         ),
-        pages=StringSchema("PDF page number or range, e.g. '7' or '1-5' (max 20 pages)"),
+        pages=StringSchema("PDF page number or range, e.g. '7' or '1-5' (max 20 pages; text layer + page image for the first 5)"),
         force=BooleanSchema(
             description="Return an unchanged range again",
             default=False,
@@ -425,15 +428,23 @@ class ReadFileTool(_FsTool):
         except Exception as e:
             return ToolResult.error(f"Error reading file: {e}")
 
-    def _read_pdf(self, fp: Path, pages: str | None) -> str:
-        from nanobot.utils.document import PdfPageRangeError, PdfSafetyError, extract_pdf_pages
+    _MAX_PDF_IMAGE_PAGES = int(os.environ.get("NANOBOT_PDF_IMAGE_PAGES", "5") or 5)
+    _PDF_RENDER_DPI = int(os.environ.get("NANOBOT_PDF_RENDER_DPI", "200") or 200)
+
+    def _read_pdf(self, fp: Path, pages: str | None) -> Any:
+        """Dual reading: normalized text layer + rendered page image per page."""
+        from nanobot.utils.document import (
+            PdfPageRangeError,
+            PdfSafetyError,
+            extract_numeric_tokens,
+            extract_pdf_page_texts,
+            normalize_persian_text,
+            render_pdf_pages,
+        )
 
         try:
-            extraction = extract_pdf_pages(
-                fp,
-                pages=pages,
-                max_pages=self._MAX_PDF_PAGES,
-                max_chars=self._MAX_CHARS,
+            page_texts, total, start, end = extract_pdf_page_texts(
+                fp, pages=pages, max_pages=self._MAX_PDF_PAGES,
             )
         except PdfPageRangeError as e:
             return ToolResult.error(f"Error: Invalid page range '{pages}': {e!s}.")
@@ -441,20 +452,73 @@ class ReadFileTool(_FsTool):
             return ToolResult.error(f"Error reading PDF: {e}")
         except Exception as e:
             return ToolResult.error(f"Error reading PDF: {e}")
+        if total == 0:
+            return f"(PDF has no pages: {fp})"
 
-        if not extraction.text:
-            return f"(PDF has no extractable text: {fp})"
+        image_indexes = [p.index for p in page_texts][: max(self._MAX_PDF_IMAGE_PAGES, 0)]
+        images: dict[int, bytes] = {}
+        render_error: str | None = None
+        if image_indexes:
+            try:
+                images = dict(zip(image_indexes, render_pdf_pages(fp, image_indexes, dpi=self._PDF_RENDER_DPI)))
+            except Exception as e:  # PyMuPDF missing or render failure
+                render_error = str(e)
 
-        result = extraction.text
-        if extraction.end_page < extraction.total_pages - 1:
-            next_start = extraction.end_page + 2
-            next_end = min(extraction.end_page + 1 + self._MAX_PDF_PAGES, extraction.total_pages)
-            result += (
-                f"\n\n(Showing pages {extraction.start_page + 1}-{extraction.end_page + 1} "
-                f"of {extraction.total_pages}. Use pages='{next_start}-{next_end}' to continue.)"
-            )
-        return result
+        blocks: list[dict[str, Any]] = []
+        all_numbers: list[str] = []
+        any_scan = False
+        chars = 0
+        for page in page_texts:
+            n = page.index + 1
+            if page.raw:
+                norm = normalize_persian_text(page.raw)
+                text = norm.text
+                if chars + len(text) > self._MAX_CHARS:
+                    text = text[: max(self._MAX_CHARS - chars, 0)] + "\n... (truncated)"
+                chars += len(text)
+                header = f"[page {n}: text layer (machine-extracted)]"
+                if norm.visual_order_fixed:
+                    header += " (visual-order Persian detected: word order and digit runs were fixed in code; raw layer below)"
+                blocks.append({"type": "text", "text": f"{header}\n{text}"})
+                if norm.visual_order_fixed:
+                    blocks.append({"type": "text", "text": f"[page {n}: raw text layer (unnormalized)]\n{page.raw[:20_000]}"})
+                nums = extract_numeric_tokens(text)
+                all_numbers.extend(x for x in nums if x not in all_numbers)
+                blocks.append({"type": "text", "text": f"[page {n}: numbers in text layer] " + (", ".join(nums) or "(none)")})
+            else:
+                any_scan = True
+                blocks.append({"type": "text", "text": f"[page {n}: NO text layer - scanned page; read every value from the image only and mark it as image-only]"})
+            if page.index in images:
+                blocks.append({
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64," + base64.b64encode(images[page.index]).decode()},
+                    "_meta": {"path": f"{fp}#page={n}"},
+                })
+                blocks.append({"type": "text", "text": f"[page {n}: rendered image - authoritative for layout/order]"})
+            elif render_error:
+                blocks.append({"type": "text", "text": f"[page {n}: image not available: {render_error}]"})
+            else:
+                blocks.append({"type": "text", "text": f"[page {n}: image not attached (image cap {self._MAX_PDF_IMAGE_PAGES} pages per call); call read_file with pages='{n}' to see it]"})
 
+        blocks.append({"type": "text", "text": (
+            "[PDF cross-check rules]\n"
+            "1. Read each page from BOTH the text layer and the rendered image.\n"
+            "2. Every number you report (prices, dates, codes, quantities) must be confirmed against the image; "
+            "use the image for layout, row/column order and RTL reading order.\n"
+            "3. Never output a number that is not in the text layer of a page that has one; "
+            "only scanned pages (no text layer) may use image-only values, and those must be marked image-only.\n"
+            "4. List every mismatch between text layer and image explicitly; mark uncertain fields as uncertain (نامشخص).\n"
+            "5. Before finalizing, call verify_pdf_numbers(path, values) with the numbers you plan to use."
+            + ("\nSome pages have no text layer: OCR from the image only, be extra careful." if any_scan else "")
+        )})
+
+        if end < total - 1:
+            next_start = end + 2
+            next_end = min(end + 1 + self._MAX_PDF_PAGES, total)
+            blocks.append({"type": "text", "text": (
+                f"(Showing pages {start + 1}-{end + 1} of {total}. Use pages='{next_start}-{next_end}' to continue.)"
+            )})
+        return blocks
     def _read_office_doc(
         self,
         fp: Path,
@@ -1192,3 +1256,63 @@ class ListDirTool(_FsTool):
             return ToolResult.error(f"Error: {e}")
         except Exception as e:
             return ToolResult.error(f"Error listing directory: {e}")
+
+
+@tool_parameters(
+    tool_parameters_schema(
+        path=StringSchema("Path of the PDF"),
+        values=ArraySchema(
+            StringSchema("A number as you plan to report it, e.g. '12,800,000' or '1405/08/05'"),
+            description="Numbers (prices, dates, codes) to check against the PDF text layer",
+        ),
+        pages=StringSchema("Optional page number or range, e.g. '1' or '1-3'"),
+        required=["path", "values"],
+    )
+)
+class VerifyPdfNumbersTool(_FsTool):
+    """Check that numbers exist in a PDF's (normalized) text layer."""
+    _scopes = {"core", "subagent"}
+
+    @property
+    def name(self) -> str:
+        return "verify_pdf_numbers"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Check whether given numbers (prices, dates, codes) occur in a PDF's text layer "
+            "after Persian normalization. Use before finalizing values read from a PDF."
+        )
+
+    @property
+    def read_only(self) -> bool:
+        return True
+
+    async def execute(self, path: str | None = None, values: list[str] | None = None,
+                      pages: str | None = None, **kwargs: Any) -> Any:
+        from nanobot.utils.document import (
+            extract_pdf_page_texts,
+            find_numbers_in_text,
+            normalize_persian_text,
+        )
+
+        if not path or not values:
+            return ToolResult.error("Error: path and values are required")
+        try:
+            fp = self._resolve_read(path)
+            if not fp.is_file():
+                return ToolResult.error(f"Error: File not found: {path}")
+            page_texts, _total, _s, _e = extract_pdf_page_texts(fp, pages=pages, max_pages=200)
+        except Exception as e:
+            return ToolResult.error(f"Error reading PDF: {e}")
+        if not any(p.raw for p in page_texts):
+            return "No text layer in the selected pages (scanned PDF): numbers cannot be verified against text; confirm them on the image and mark them image-only."
+        text = "\n".join(normalize_persian_text(p.raw).text for p in page_texts)
+        found = find_numbers_in_text(text, [str(v) for v in values])
+        missing = [v for v, ok in found.items() if not ok]
+        lines = [f"{'OK     ' if ok else 'MISSING'} {v}" for v, ok in found.items()]
+        lines.append(
+            "All values found in the text layer." if not missing
+            else f"{len(missing)} value(s) NOT in the text layer: re-check them on the image and report them as mismatches."
+        )
+        return "\n".join(lines)

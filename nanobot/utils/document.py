@@ -2,6 +2,8 @@
 
 import codecs
 import mimetypes
+import re
+import unicodedata
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -717,3 +719,64 @@ def reference_non_image_attachments(
         suffix = "\n".join(attachment_refs)
         content = f"{content}\n\n{suffix}" if content else suffix
     return content, image_paths
+
+
+# PDF dual reading lives in the standalone pdf_dual module (shared with Open WebUI).
+from nanobot.utils.pdf_dual import (  # noqa: F401  (re-exported)
+    _PRESENTATION_FORM_RANGES,
+    _ARABIC_INDIC_DIGITS,
+    _PERSIAN_DIGITS,
+    _EASTERN_DIGITS,
+    _DIGIT_TRANSLATION,
+    _MIRROR,
+    _EASTERN_DIGIT_RUN_RE,
+    _NUMBER_TOKEN_RE,
+    _is_presentation_form,
+    _is_arabic_letter,
+    detect_visual_order,
+    _reverse_digit_runs,
+    _fix_visual_token,
+    _LINE_START_PUNCT,
+    _line_looks_logical,
+    _fix_visual_line,
+    NormalizedPdfText,
+    normalize_persian_text,
+    extract_numeric_tokens,
+    _canonical_number,
+    find_numbers_in_text,
+    render_pdf_pages,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class PdfPageText:
+    index: int
+    raw: str
+
+
+def extract_pdf_page_texts(
+    path: Path,
+    *,
+    pages: str | None = None,
+    max_pages: int = _MAX_PDF_ATTACHMENT_PAGES,
+) -> tuple[list[PdfPageText], int, int, int]:
+    """Per-page raw pypdf text for a bounded range: (pages, total, start, end)."""
+    from pypdf import PdfReader
+
+    reader = PdfReader(path, strict=False)
+    total_pages = len(reader.pages)
+    if total_pages == 0:
+        return [], 0, 0, -1
+    start, end = _parse_pdf_page_range(pages, total_pages)
+    end = min(end, start + max_pages - 1)
+    out: list[PdfPageText] = []
+    for index in range(start, end + 1):
+        page = reader.pages[index]
+        contents = page.get_contents()
+        if contents is not None and len(contents.get_data()) > _MAX_PDF_CONTENT_STREAM_SIZE:
+            raise PdfSafetyError(
+                f"page {index + 1} content stream exceeds "
+                f"{_MAX_PDF_CONTENT_STREAM_SIZE // (1024 * 1024)} MB limit"
+            )
+        out.append(PdfPageText(index, (page.extract_text() or "").strip()))
+    return out, total_pages, start, end
